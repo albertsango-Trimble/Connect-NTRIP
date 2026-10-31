@@ -1,0 +1,28 @@
+[Unit]
+Description=Connect-NTRIP caster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ntrip
+Group=ntrip
+WorkingDirectory=/opt/connect-ntrip/caster
+Environment=NODE_ENV=production
+Environment=CASTER_CONFIG=/etc/connect-ntrip/config.json
+Environment=DATA_DIR=/var/lib/connect-ntrip
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/connect-ntrip
+ReadOnlyPaths=/etc/connect-ntrip
+
+[Install]
+WantedBy=multi-user.target

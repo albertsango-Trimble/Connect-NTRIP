@@ -1,0 +1,6 @@
+# Caddy gets a Let's Encrypt certificate automatically and serves the dashboard API
+# and WebSocket over HTTPS/WSS. NTRIP itself (port 2101) does not go through Caddy.
+caster.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+}

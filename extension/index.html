@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NTRIP Caster</title>
+  <link rel="icon" href="./icon.png">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" class="brand-icon" aria-hidden="true"><path d="M12 2 4 20h16L12 2Zm0 5.2L16.9 18H7.1L12 7.2Z" fill="currentColor"/><circle cx="12" cy="14" r="2" fill="currentColor"/></svg>
+      <div>
+        <div class="brand-title" id="casterName">NTRIP Caster</div>
+        <div class="brand-sub" id="casterAddr">Not connected</div>
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+    <div class="topbar-right">
+      <span class="pill" id="connPill" data-state="off">Offline</span>
+      <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1L15 3.5h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" fill="currentColor" transform="translate(-1 0)"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="map-wrap">
+      <div id="map"></div>
+      <div class="map-tools">
+        <label><input type="checkbox" id="trailsToggle" checked> Trails</label>
+        <label><input type="checkbox" id="labelsToggle" checked> Labels</label>
+        <button id="fitBtn" class="small-btn">Fit all</button>
+      </div>
+      <div class="legend">
+        <span><i class="dot q4"></i>RTK fixed</span>
+        <span><i class="dot q5"></i>Float</span>
+        <span><i class="dot q2"></i>DGPS</span>
+        <span><i class="dot q1"></i>Autonomous</span>
+        <span><i class="dot stale"></i>No recent position</span>
+        <span><i class="tri"></i>Base</span>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="rovers" class="active">Machines <b id="roverCount">0</b></button>
+        <button role="tab" data-tab="bases">Bases</button>
+        <button role="tab" data-tab="devices">Logins</button>
+        <button role="tab" data-tab="log">Log</button>
+      </nav>
+
+      <div class="tab-body" id="tab-rovers"></div>
+      <div class="tab-body hidden" id="tab-bases"></div>
+      <div class="tab-body hidden" id="tab-devices">
+        <form id="deviceForm" class="card form">
+          <h3 id="deviceFormTitle">Add rover login</h3>
+          <label>Receiver serial number
+            <input name="serial" required autocomplete="off" placeholder="e.g. 5834R00123" pattern="[A-Za-z0-9\-_]{3,40}">
+          </label>
+          <label>Machine name
+            <input name="label" autocomplete="off" placeholder="e.g. Excavator 3">
+          </label>
+          <label>Password (chosen by the user)
+            <input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="64">
+          </label>
+          <fieldset>
+            <legend>Allowed mountpoints <span class="hint">(none ticked = all)</span></legend>
+            <div id="mountChecks" class="checks"></div>
+          </fieldset>
+          <label class="inline"><input type="checkbox" name="enabled" checked> Enabled</label>
+          <div class="form-actions">
+            <button type="submit" class="primary-btn" id="deviceSubmit">Add login</button>
+            <button type="button" class="ghost-btn hidden" id="deviceCancel">Cancel</button>
+          </div>
+          <p class="form-msg" id="deviceMsg"></p>
+        </form>
+        <div id="deviceList"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-log"><ol class="log" id="logList"></ol></div>
+    </aside>
+  </main>
+
+  <dialog id="settingsDlg">
+    <form method="dialog" id="settingsForm">
+      <h3>Caster connection</h3>
+      <label>Caster dashboard URL
+        <input name="casterUrl" placeholder="https://caster.example.com" required>
+      </label>
+      <label>Development token <span class="hint">(only needed outside Trimble Connect)</span>
+        <input name="devToken" type="password" autocomplete="off">
+      </label>
+      <div class="form-actions">
+        <button value="save" class="primary-btn">Save &amp; connect</button>
+        <button value="cancel" class="ghost-btn" formnovalidate>Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+{
+  "casterName": "UPG Caster",
+  "operator": "Ultimate Positioning Group",
+  "country": "AUS",
+  "publicHost": "caster.example.com",
+  "ntripPort": 2101,
+  "dashboardPort": 8080,
+  "dataDir": "./data",
+
+  "adminEmails": ["you@example.com"],
+  "dashboardToken": "",
+  "allowedOrigins": [
+    "https://albertsango-trimble.github.io",
+    "https://web.connect.trimble.com",
+    "http://localhost:5173"
+  ],
+  "tcApiHosts": [
+    "https://app.connect.trimble.com/tc/api/2.0",
+    "https://app21.connect.trimble.com/tc/api/2.0",
+    "https://app31.connect.trimble.com/tc/api/2.0",
+    "https://app32.connect.trimble.com/tc/api/2.0"
+  ],
+
+  "sourceIdleTimeoutSec": 60,
+
+  "mountpoints": [
+    {
+      "name": "UPG_RTCM3",
+      "identifier": "Melbourne",
+      "format": "RTCM 3.2",
+      "formatDetails": "1004(1),1005(10),1012(1),1033(10),MSM",
+      "carrier": 2,
+      "navSystem": "GPS+GLO+GAL+BDS",
+      "sourcePassword": "change-me-rtcm",
+      "lat": -37.8136,
+      "lon": 144.9631
+    },
+    {
+      "name": "UPG_CMRX",
+      "identifier": "Melbourne",
+      "format": "CMRx",
+      "formatDetails": "CMRx",
+      "carrier": 2,
+      "navSystem": "GPS+GLO+GAL+BDS",
+      "sourcePassword": "change-me-cmrx",
+      "lat": -37.8136,
+      "lon": 144.9631
+    },
+    {
+      "name": "UPG_CMRP",
+      "identifier": "Melbourne",
+      "format": "CMR+",
+      "formatDetails": "CMR+",
+      "carrier": 2,
+      "navSystem": "GPS+GLO",
+      "sourcePassword": "change-me-cmrp",
+      "lat": -37.8136,
+      "lon": 144.9631
+    }
+  ]
+}
