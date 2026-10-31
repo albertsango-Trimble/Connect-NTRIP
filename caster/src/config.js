@@ -31,6 +31,23 @@ export function loadConfig() {
     if (!m.sourcePassword) throw new Error(`Mountpoint ${m.name} needs a sourcePassword`);
     names.add(m.name);
   }
+  // Base receivers whose own web interface can be opened from the extension
+  cfg.receivers ??= [];
+  cfg.webUi = { port: 8081, ...(cfg.webUi || {}) };
+  if (process.env.WEBUI_PORT) cfg.webUi.port = Number(process.env.WEBUI_PORT);
+  const ids = new Set();
+  for (const r of cfg.receivers) {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(r.id || '')) throw new Error(`Receiver id "${r.id}" must be lower-case letters, digits and dashes (it becomes part of a web address)`);
+    if (ids.has(r.id)) throw new Error(`Duplicate receiver id: ${r.id}`);
+    ids.add(r.id);
+    r.mountpoints ??= [];
+    for (const mp of r.mountpoints) if (!names.has(mp)) throw new Error(`Receiver ${r.id} lists unknown mountpoint ${mp}`);
+    if (r.webUrl) {
+      const u = new URL(r.webUrl);
+      if (u.protocol !== 'http:') throw new Error(`Receiver ${r.id}: webUrl must be http://… (the caster adds HTTPS in front of it)`);
+      if (!cfg.webUi.domain) throw new Error('Set webUi.domain (e.g. "bases.example.com") to use receiver web UIs');
+    }
+  }
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   return cfg;
 }

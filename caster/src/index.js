@@ -3,6 +3,7 @@ import { DeviceStore } from './devices.js';
 import { CasterState } from './state.js';
 import { startNtripServer } from './ntrip.js';
 import { startDashboard } from './dashboard.js';
+import { Tokens, loadSecret, startWebUiProxy } from './webui.js';
 
 const config = loadConfig();
 const devices = new DeviceStore(config.dataDir);
@@ -13,13 +14,16 @@ if (!config.adminEmails.length && !config.dashboardToken) {
   console.warn('No adminEmails or dashboardToken configured: nobody will be able to open the dashboard.');
 }
 
+const tokens = new Tokens(loadSecret(config));
 const ntrip = startNtripServer({ config, state, devices });
-const dash = startDashboard({ config, state, devices });
+const dash = startDashboard({ config, state, devices, tokens });
+const webui = startWebUiProxy({ config, state, tokens });
 
 function shutdown() {
   console.log('Shutting down');
   ntrip.close();
   dash.close();
+  webui?.close();
   setTimeout(() => process.exit(0), 500).unref();
 }
 process.on('SIGINT', shutdown);

@@ -6,8 +6,9 @@
   "ntripPort": 2101,
   "dashboardPort": 8080,
   "dataDir": "./data",
-
-  "adminEmails": ["you@example.com"],
+  "adminEmails": [
+    "you@example.com"
+  ],
   "dashboardToken": "",
   "allowedOrigins": [
     "https://albertsango-trimble.github.io",
@@ -20,9 +21,11 @@
     "https://app31.connect.trimble.com/tc/api/2.0",
     "https://app32.connect.trimble.com/tc/api/2.0"
   ],
-
   "sourceIdleTimeoutSec": 60,
-
+  "webUi": {
+    "domain": "bases.example.com",
+    "port": 8081
+  },
   "mountpoints": [
     {
       "name": "UPG_RTCM3",
@@ -56,6 +59,21 @@
       "sourcePassword": "change-me-cmrp",
       "lat": -37.8136,
       "lon": 144.9631
+    }
+  ],
+  "receivers": [
+    {
+      "id": "melbourne",
+      "name": "Melbourne base",
+      "model": "Trimble Alloy",
+      "mountpoints": [
+        "UPG_RTCM3",
+        "UPG_CMRX",
+        "UPG_CMRP"
+      ],
+      "webUrl": "http://10.8.0.2",
+      "username": "admin",
+      "password": "receiver-web-password"
     }
   ]
 }

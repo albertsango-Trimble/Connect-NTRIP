@@ -32,6 +32,19 @@
         <label><input type="checkbox" id="labelsToggle" checked> Labels</label>
         <button id="fitBtn" class="small-btn">Fit all</button>
       </div>
+      <div class="webui hidden" id="webuiPanel" role="dialog" aria-label="Base receiver web interface">
+        <div class="webui-bar">
+          <svg viewBox="0 0 30 30" class="webui-icon" aria-hidden="true"><path d="M15 3 27 26H3Z" fill="currentColor"/><circle cx="15" cy="18" r="3" fill="#fff"/></svg>
+          <div class="webui-title"><b id="webuiTitle">Base receiver</b><span id="webuiSub"></span></div>
+          <button class="small-btn" id="webuiReload" title="Sign in again and reload">Reload</button>
+          <button class="small-btn" id="webuiNewTab" title="Open the receiver's web interface in a new browser tab">Open in new tab</button>
+          <button class="icon-btn" id="webuiClose" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <iframe id="webuiFrame" title="Base receiver web interface" referrerpolicy="no-referrer" allow="clipboard-write; fullscreen"></iframe>
+        <div class="webui-msg hidden" id="webuiMsg"></div>
+      </div>
       <div class="legend">
         <span><i class="dot q4"></i>RTK fixed</span>
         <span><i class="dot q5"></i>Float</span>

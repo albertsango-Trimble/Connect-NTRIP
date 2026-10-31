@@ -29,7 +29,7 @@ base and every machine receiving corrections on a live map.
 - Base maps, the same as the 360 Imagery Viewer's map: **Street** (OpenStreetMap), **Satellite** (Esri World Imagery), **WMTS** (a capabilities URL with a layer picker, or any `{z}/{x}/{y}` tile URL) and **GeoTIFF** (several at once, from this computer or read in place from the Connect project, reprojected from their own CRS, Cloud Optimized GeoTIFFs streamed at full resolution). GeoTIFFs and the chosen base map are remembered per project in the browser, and ticking **Share these GeoTIFFs with everyone on the project** in the GeoTIFF panel saves them to `ntrip-caster-map.json` in the project's top folder (plus a reduced picture for GeoTIFFs added from someone's PC), so everyone who opens the extension gets them. Removing a shared GeoTIFF removes it for everyone. The shared modules are copies of Connect-360's `core/geotiff*.ts`, `core/wmts.ts`, `core/geo.ts`, `ui/sourceDialog.ts`, `connect/projectFiles.ts` and its shared-setup pattern (`connect/sharedSession.ts`).
 - Map: base(s) as purple triangles, machines as dots coloured by fix (green fixed, orange float, blue DGPS, grey autonomous/stale), optional trails and labels.
 - Machines tab: each connected rover with fix, satellites, HDOP, correction age, data rate, time connected, and a Disconnect button.
-- Bases tab: each mountpoint's status, data rate, RTCM message types seen, machines on it.
+- Bases tab: each base receiver (with its **web UI**, opened inside the extension) and each mountpoint's status, data rate, RTCM message types seen, machines on it.
 - Logins tab: add/edit/disable/delete rover logins.
 - Log tab: connections, refused logins (with reason), base drop-outs.
 
@@ -63,6 +63,41 @@ A caster relays streams; it does not convert formats. So the receiver sends **on
 | 3 | `UPG_CMRP`  | its `sourcePassword` | CMR+ |
 
 Caster address `caster.yourdomain.com`, port `2101`, NTRIP version 1 or 2 (both accepted). For NTRIP 2 the username is ignored; only the password is checked.
+
+## 2a. Open the base receiver's own web UI from the extension
+
+Each base receiver listed in the config gets an **Open web UI** button (Bases tab, and the base's popup on the map). The receiver's web interface opens in a panel over the map, or in a new tab.
+
+How it works: the caster proxies the receiver's web server at `https://<receiver id>.bases.yourdomain.com`. Caddy issues that certificate automatically (only for receivers in the config). The extension asks the caster for a one-time link valid for 60 seconds, which only `adminEmails` users can get; opening it signs that browser in to that one receiver for 8 hours. The proxy fills in the receiver's own login, so users never need the receiver password, and it fixes the receiver's headers so its pages can be shown inside Connect.
+
+Setup:
+
+1. Add a wildcard DNS record `*.bases.yourdomain.com` → the VM's IP (the setup script uses `bases.<DOMAIN>` unless you set `BASES_DOMAIN`).
+2. Make the receiver's web server reachable **from the VM** (see below).
+3. Add it to `/etc/connect-ntrip/config.json`:
+   ```json
+   "webUi": { "domain": "bases.yourdomain.com", "port": 8081 },
+   "receivers": [
+     {
+       "id": "melbourne",
+       "name": "Melbourne base",
+       "model": "Trimble Alloy",
+       "mountpoints": ["UPG_RTCM3", "UPG_CMRX", "UPG_CMRP"],
+       "webUrl": "http://10.8.0.2",
+       "username": "admin",
+       "password": "receiver web password"
+     }
+   ]
+   ```
+   `id` becomes the web address (`melbourne.bases.yourdomain.com`). `mountpoints` ties the receiver to its streams so the map marker and Bases tab show it. `username`/`password` are the receiver's web login (HTTP Basic or Digest are both handled); leave them out to have users log in to the receiver themselves.
+4. `sudo systemctl restart connect-ntrip`. The Bases tab shows whether the caster can reach each receiver (checked every minute).
+
+**Getting the VM to the receiver.** Bases usually sit behind a site router or a cellular modem, so the VM can't reach them directly. Two ways:
+
+- **VPN (recommended).** Most industrial/cellular routers (Teltonika, Cradlepoint, Digi, etc.) can run WireGuard or OpenVPN. Put the VM and the site router on a small VPN and use the receiver's LAN address as `webUrl` (e.g. `http://192.168.1.50`). The receiver is never exposed to the internet and the traffic is encrypted.
+- **Port forward.** Forward a port on the site router to the receiver's web port, allow it **only from the VM's IP**, and use the site's public address as `webUrl` (e.g. `http://203.0.113.10:8080`). Simpler, but the link between the VM and the site is plain HTTP.
+
+If someone's browser blocks cookies for pages embedded in other sites, the panel shows a message and **Open in new tab** works instead.
 
 ## 3. Set up rovers
 
@@ -107,4 +142,5 @@ Then `cd extension && npm install && npm run dev`, open http://localhost:5173, a
 - **NTRIP credentials travel in clear text** (Basic auth over plain TCP), which is how NTRIP works and what rovers expect. Use per-machine passwords, not passwords people reuse elsewhere.
 - Dead rover connections are detected by TCP keepalive, so a machine that loses signal can take a minute or two to drop off the list. Its marker turns grey after 15 s without a position.
 - A base that sends nothing for `sourceIdleTimeoutSec` (default 60 s) is disconnected so it can reconnect cleanly.
+- Each base web UI session lasts 8 hours and is tied to one receiver. Openings are recorded in the Log tab.
 - The Trimble Connect API host list (`tcApiHosts`) covers the regional Connect servers; the first one that accepts the token is used.

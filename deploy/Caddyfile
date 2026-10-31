@@ -1,6 +1,22 @@
-# Caddy gets a Let's Encrypt certificate automatically and serves the dashboard API
-# and WebSocket over HTTPS/WSS. NTRIP itself (port 2101) does not go through Caddy.
+# Caddy gets Let's Encrypt certificates automatically.
+# NTRIP itself (port 2101) does not go through Caddy.
+{
+	# Certificates for base receiver web UIs are issued on demand, only for receivers in the caster config.
+	on_demand_tls {
+		ask http://127.0.0.1:8080/tls-ask
+	}
+}
+
+# Dashboard API and live WebSocket for the extension
 caster.example.com {
 	encode gzip
 	reverse_proxy 127.0.0.1:8080
+}
+
+# Base receiver web UIs: <receiver id>.bases.example.com (needs a wildcard DNS record pointing at this VM)
+*.bases.example.com {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8081
 }

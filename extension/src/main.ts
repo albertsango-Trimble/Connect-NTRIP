@@ -9,7 +9,7 @@ import { RangeClient } from './core/geotiffTiles';
 import { initGeoreference } from './core/geo';
 import { chooseSource } from './ui/sourceDialog';
 import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
-import type { CasterMessage, Device, LogEvent, Mountpoint, Rover } from './types';
+import type { CasterMessage, Device, LogEvent, Mountpoint, Receiver, Rover } from './types';
 
 const STALE_MS = 15_000;
 const FIX_COLOURS: Record<number, string> = { 0: '--q0', 1: '--q1', 2: '--q2', 3: '--q1', 4: '--q4', 5: '--q5', 6: '--q1', 7: '--q1', 8: '--q1', 9: '--q2' };
@@ -44,6 +44,8 @@ const app = {
   mountpoints: [] as Mountpoint[],
   rovers: new Map<string, Rover>(),
   devices: [] as Device[],
+  receivers: [] as Receiver[],
+  webUiOpen: null as string | null,
   log: [] as LogEvent[],
   selected: null as string | null,
   fitted: false,
@@ -280,7 +282,8 @@ function renderMap() {
     const ll: [number, number] = [best.position!.lon, best.position!.lat];
     const key = g.mounts.map((m) => m.name).join('|');
     const online = g.mounts.some((m) => m.online);
-    const label = g.mounts.map((m) => m.name).join(' · ');
+    const receiver = app.receivers.find((r) => r.mountpoints.some((mp) => g.mounts.some((m) => m.name === mp)));
+    const label = receiver ? receiver.name : g.mounts.map((m) => m.name).join(' · ');
     seen.add(key);
     let entry = baseMarkers.get(key);
     if (!entry || entry.online !== online || entry.label !== label) {
@@ -333,9 +336,11 @@ function basePopup(key: string) {
   const mounts = app.mountpoints.filter((m) => key.split('|').includes(m.name));
   const best = mounts.find((m) => m.online && m.position?.from !== 'config') || mounts[0];
   const rows = mounts.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.format)} · ${m.online ? `${rate(m.rateBps)} · ${m.rovers} machine${m.rovers === 1 ? '' : 's'}` : 'offline'}</td></tr>`).join('');
-  return `<b>Base station</b><table>${rows}
+  const names = key.split('|');
+  const receiver = app.receivers.find((r) => r.webUi && r.mountpoints.some((m) => names.includes(m)));
+  return `<b>${esc(receiver?.name || 'Base station')}</b>${receiver?.model ? `<div style="color:#6a6e79;font-size:12px">${esc(receiver.model)}</div>` : ''}<table>${rows}
     ${best?.position ? `<tr><td>Position</td><td>${best.position.lat.toFixed(7)}, ${best.position.lon.toFixed(7)}<br><small>from ${esc(best.position.from)}</small></td></tr>` : ''}
-  </table>`;
+  </table>${receiver ? `<button class="popup-btn" data-webui="${esc(receiver.id)}">Open receiver web UI</button>` : ''}`;
 }
 
 function dropRover(id: string) {
@@ -422,13 +427,38 @@ function renderRovers() {
     .join('');
 }
 
+function receiverStatus(r: Receiver) {
+  if (r.reachable === null || r.reachable === undefined) return { cls: 'stale', text: 'Checking…' };
+  return r.reachable ? { cls: 'online', text: 'Web UI reachable' } : { cls: 'offline', text: `Web UI not reachable${r.error ? ` (${r.error})` : ''}` };
+}
+
+function renderReceivers() {
+  if (!app.receivers.length) return '';
+  return `<div class="section-title">Base receivers</div>${app.receivers
+    .map((r) => {
+      const st = receiverStatus(r);
+      const mounts = app.mountpoints.filter((m) => r.mountpoints.includes(m.name));
+      const online = mounts.filter((m) => m.online).length;
+      return `<div class="card receiver-card">
+        <div class="card-head">
+          <span class="dot ${st.cls}"></span>
+          <div style="min-width:0"><div class="card-title">${esc(r.name)}</div>
+            <div class="card-sub">${esc([r.model, mounts.length ? `${online}/${mounts.length} streams online` : ''].filter(Boolean).join(' · '))}</div></div>
+        </div>
+        <div class="card-sub" style="margin-top:6px">${esc(st.text)}</div>
+        ${r.webUi ? `<div class="actions"><button class="primary-btn" data-webui="${esc(r.id)}">Open web UI</button><button class="ghost-btn" data-webui-tab="${esc(r.id)}">New tab</button></div>` : ''}
+      </div>`;
+    })
+    .join('')}<div class="section-title">Mountpoints</div>`;
+}
+
 function renderBases() {
   const el = $('#tab-bases');
   if (!app.mountpoints.length) {
     el.innerHTML = '<div class="empty">No mountpoints configured on the caster.</div>';
     return;
   }
-  el.innerHTML = app.mountpoints
+  el.innerHTML = renderReceivers() + app.mountpoints
     .map(
       (m) => `
     <div class="card">
@@ -489,8 +519,9 @@ function renderDevices() {
     .join('');
 }
 
-const GOOD = new Set(['rover.connected', 'source.connected', 'device.added']);
-const BAD = new Set(['rover.rejected', 'source.rejected', 'rover.disconnected', 'source.disconnected', 'source.timeout', 'rover.overflow', 'rover.kicked', 'device.removed']);
+const receiverName = (id: string) => app.receivers.find((r) => r.id === id)?.name || id;
+const GOOD = new Set(['rover.connected', 'source.connected', 'device.added', 'receiver.reachable']);
+const BAD = new Set(['rover.rejected', 'source.rejected', 'rover.disconnected', 'source.disconnected', 'source.timeout', 'rover.overflow', 'rover.kicked', 'device.removed', 'receiver.unreachable']);
 function describe(ev: LogEvent) {
   const who = ev.serial ? app.devices.find((d) => d.serial === ev.serial)?.label || ev.serial : '';
   switch (ev.type) {
@@ -508,6 +539,9 @@ function describe(ev: LogEvent) {
     case 'device.added': return `Login ${ev.serial} added by ${ev.by}`;
     case 'device.updated': return `Login ${ev.serial} updated (${((ev.fields as string[]) || []).join(', ')}) by ${ev.by}`;
     case 'device.removed': return `Login ${ev.serial} deleted by ${ev.by}`;
+    case 'webui.opened': return `${receiverName(String(ev.receiver))} web UI opened by ${ev.by}`;
+    case 'receiver.reachable': return `${receiverName(String(ev.receiver))} web UI reachable again`;
+    case 'receiver.unreachable': return `${receiverName(String(ev.receiver))} web UI not reachable${ev.reason ? ` (${ev.reason})` : ''}`;
     default: return ev.type;
   }
 }
@@ -588,10 +622,12 @@ function handleMessage(msg: CasterMessage) {
     app.rovers = new Map(s.rovers.map((r) => [r.id, r]));
     app.log = s.log;
     app.devices = msg.devices;
+    app.receivers = s.receivers ?? [];
     renderAll();
   } else if (msg.type === 'tick') {
     app.serverOffset = msg.serverTime - Date.now();
     app.mountpoints = msg.mountpoints;
+    if (msg.receivers) app.receivers = msg.receivers;
     const next = new Map<string, Rover>();
     for (const r of msg.rovers) next.set(r.id, { ...r, track: app.rovers.get(r.id)?.track || [] });
     for (const p of msg.positions) {
@@ -744,6 +780,81 @@ $('#deviceList').addEventListener('click', async (e) => {
       alert((err as Error).message);
     }
   }
+});
+
+// ------------------------------------------------------------------ base receiver web UI
+const webuiPanel = $('#webuiPanel');
+const webuiFrame = $<HTMLIFrameElement>('#webuiFrame');
+const webuiMsg = $('#webuiMsg');
+
+/** A one-time sign-in link (valid 60 s) to the receiver's web interface through the caster. */
+async function webUiLink(id: string): Promise<string> {
+  const reply = (await api('POST', `/api/receivers/${encodeURIComponent(id)}/webui`)) as { url?: string };
+  if (!reply.url) throw new Error('The caster did not return a link');
+  return reply.url;
+}
+
+function webuiMessage(text: string | null) {
+  webuiMsg.classList.toggle('hidden', !text);
+  webuiMsg.textContent = text ?? '';
+}
+
+async function openWebUi(id: string) {
+  const r = app.receivers.find((x) => x.id === id);
+  if (!r) return;
+  app.webUiOpen = id;
+  popup.remove();
+  $('#webuiTitle').textContent = r.name;
+  $('#webuiSub').textContent = [r.model, r.mountpoints.join(' · ')].filter(Boolean).join(' — ');
+  webuiPanel.classList.remove('hidden');
+  webuiFrame.src = 'about:blank';
+  webuiMessage(r.reachable === false ? `Connecting to ${r.name}… (the caster couldn't reach it on its last check)` : `Connecting to ${r.name}…`);
+  try {
+    const url = await webUiLink(id);
+    if (app.webUiOpen !== id) return;
+    webuiFrame.onload = () => webuiMessage(null);
+    webuiFrame.src = url;
+  } catch (err) {
+    webuiMessage(`Couldn't open the web UI: ${(err as Error).message}`);
+  }
+}
+
+async function openWebUiTab(id: string) {
+  // Open the tab straight away (inside the click) so popup blockers allow it, then point it at the sign-in link.
+  const tab = window.open('about:blank', '_blank');
+  try {
+    const url = await webUiLink(id);
+    if (tab) {
+      tab.opener = null;
+      tab.location.href = url;
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
+  } catch (err) {
+    tab?.close();
+    alert(`Couldn't open the web UI: ${(err as Error).message}`);
+  }
+}
+
+function closeWebUi() {
+  app.webUiOpen = null;
+  webuiPanel.classList.add('hidden');
+  webuiFrame.src = 'about:blank';
+  webuiMessage(null);
+}
+
+$('#webuiClose').addEventListener('click', closeWebUi);
+$('#webuiReload').addEventListener('click', () => app.webUiOpen && void openWebUi(app.webUiOpen));
+$('#webuiNewTab').addEventListener('click', () => app.webUiOpen && void openWebUiTab(app.webUiOpen));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && app.webUiOpen && !(document.querySelector('dialog[open]'))) closeWebUi();
+});
+// Buttons in the Bases tab and in base markers' popups
+document.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-webui], [data-webui-tab]');
+  if (!t) return;
+  if (t.dataset.webui) void openWebUi(t.dataset.webui);
+  else if (t.dataset.webuiTab) void openWebUiTab(t.dataset.webuiTab);
 });
 
 // settings

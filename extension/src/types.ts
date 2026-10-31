@@ -71,6 +71,20 @@ export interface LogEvent {
   [key: string]: unknown;
 }
 
+/** A base receiver whose own web interface can be opened through the caster */
+export interface Receiver {
+  id: string;
+  name: string;
+  model: string;
+  mountpoints: string[];
+  webUi: boolean;
+  /** null until the caster has checked */
+  reachable: boolean | null;
+  httpStatus?: number;
+  error?: string;
+  checkedAt?: number;
+}
+
 export interface Snapshot {
   casterName: string;
   host: string | null;
@@ -79,11 +93,12 @@ export interface Snapshot {
   startedAt: number;
   mountpoints: Mountpoint[];
   rovers: Rover[];
+  receivers?: Receiver[];
   log: LogEvent[];
 }
 
 export type CasterMessage =
   | { type: 'hello'; user: { email: string; name: string }; snapshot: Snapshot; devices: Device[] }
-  | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[] }
+  | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[]; receivers?: Receiver[] }
   | { type: 'event'; event: LogEvent }
   | { type: 'devices'; devices: Device[] };

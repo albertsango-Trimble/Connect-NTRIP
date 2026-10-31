@@ -13,6 +13,7 @@ export class CasterState extends EventEmitter {
     this.log = [];
     this.nextId = 1;
     this.startedAt = Date.now();
+    this.receiverStatus = new Map(); // receiver id -> { reachable, httpStatus, error, checkedAt }
     this.ticker = setInterval(() => this.tick(), 1000);
     this.ticker.unref();
   }
@@ -93,6 +94,26 @@ export class CasterState extends EventEmitter {
     this.emit('position', client);
   }
 
+  // ---- base receivers ----
+  setReceiverStatus(id, status) {
+    const prev = this.receiverStatus.get(id);
+    this.receiverStatus.set(id, { ...status, checkedAt: Date.now() });
+    if (prev && prev.reachable !== status.reachable) {
+      this.event(status.reachable ? 'receiver.reachable' : 'receiver.unreachable', { receiver: id, ...(status.error ? { reason: status.error } : {}) });
+    }
+  }
+
+  receiverViews() {
+    return this.config.receivers.map(r => ({
+      id: r.id,
+      name: r.name || r.id,
+      model: r.model || '',
+      mountpoints: r.mountpoints,
+      webUi: !!r.webUrl,
+      ...(this.receiverStatus.get(r.id) || { reachable: null }),
+    }));
+  }
+
   // ---- periodic ----
   tick() {
     for (const s of this.sources.values()) {
@@ -157,6 +178,7 @@ export class CasterState extends EventEmitter {
       startedAt: this.startedAt,
       mountpoints: this.config.mountpoints.map(m => this.sourceView(m)),
       rovers: [...this.clients.values()].map(c => this.clientView(c, true)),
+      receivers: this.receiverViews(),
       log: this.log.slice(-100),
     };
   }

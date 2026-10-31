@@ -225,3 +225,17 @@ dialog input { width: 100%; }
 .geotiff-share[hidden] { display: none; }
 .wmts-panel .geotiff-share input { width: auto; flex: none; margin-top: 2px; }
 .geotiff-share input:disabled + span { color: #8a96a3; }
+
+/* base receiver web interface, shown over the map */
+.webui { position: absolute; inset: 0; z-index: 900; display: flex; flex-direction: column; background: var(--surface); }
+.webui-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.webui-icon { width: 20px; height: 20px; color: var(--base); flex: none; }
+.webui-title { display: flex; flex-direction: column; min-width: 0; margin-right: auto; line-height: 1.2; }
+.webui-title b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.webui-title span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.webui iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.webui-msg { position: absolute; inset: 49px 0 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); background: var(--surface); line-height: 1.5; }
+.receiver-card .actions { display: flex; gap: 6px; margin-top: 8px; }
+.section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 4px 2px 0; }
+.popup-btn { margin-top: 8px; width: 100%; background: var(--brand); color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; font-weight: 600; cursor: pointer; }
+.popup-btn:hover { background: var(--brand-dark); }

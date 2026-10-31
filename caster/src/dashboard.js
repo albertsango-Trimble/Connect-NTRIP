@@ -7,10 +7,11 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { UserError, normaliseSerial } from './devices.js';
+import { isReceiverHost, startLink } from './webui.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
 
-export function startDashboard({ config, state, devices }) {
+export function startDashboard({ config, state, devices, tokens }) {
   const authCache = new Map(); // sha256(token) -> { user, expires }
 
   async function authenticate(token) {
@@ -82,6 +83,12 @@ export function startDashboard({ config, state, devices }) {
     const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
 
     try {
+      // Caddy on-demand TLS asks here before issuing a certificate for a receiver's web UI host.
+      // Only answered for local requests (Caddy's reverse-proxied traffic carries X-Forwarded-For).
+      if (url.pathname === '/tls-ask' && !req.headers['x-forwarded-for']) {
+        const ok = isReceiverHost(config, url.searchParams.get('domain'));
+        res.writeHead(ok ? 200 : 404); return res.end();
+      }
       if (url.pathname === '/api/health') {
         return send(res, 200, { ok: true, uptimeSec: Math.round((Date.now() - state.startedAt) / 1000) });
       }
@@ -127,6 +134,13 @@ export function startDashboard({ config, state, devices }) {
           broadcast({ type: 'devices', devices: devices.list() });
           return send(res, 200, { ok: true });
         }
+      }
+
+      // POST /api/receivers/:id/webui -> one-time link to the receiver's own web interface
+      if (req.method === 'POST' && parts[1] === 'receivers' && parts[3] === 'webui') {
+        const r = config.receivers.find(x => x.id === parts[2]);
+        if (!r || !r.webUrl) return send(res, 404, { error: 'This receiver has no web UI configured' });
+        return send(res, 200, { url: startLink(config, tokens, r, user.email), expiresInSec: 60 });
       }
 
       // POST /api/rovers/:id/disconnect
@@ -196,6 +210,7 @@ export function startDashboard({ config, state, devices }) {
       positions,
       mountpoints: config.mountpoints.map(m => state.sourceView(m)),
       rovers: [...state.clients.values()].map(c => state.clientView(c, false)),
+      receivers: state.receiverViews(),
     });
   });
 
