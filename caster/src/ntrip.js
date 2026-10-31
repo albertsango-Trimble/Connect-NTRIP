@@ -203,6 +203,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
   const result = auth ? devices.authenticate(serial, auth.pass, mount) : { ok: false, reason: 'no credentials' };
   if (!result.ok) {
     state.event('rover.rejected', { serial: serial || '(none)', mount, addr: req.addr, reason: result.reason });
+    if (serial && devices.get(serial)) state.recordRejected(serial, { mount, addr: req.addr, reason: result.reason, agent: req.headers['user-agent'] || '' });
     const realm = `WWW-Authenticate: Basic realm="/${mount}"\r\n`;
     sock.end(req.v2 ? httpStatus(401, 'Unauthorized', realm) : `HTTP/1.0 401 Unauthorized\r\n${realm}\r\n`);
     return;
@@ -226,6 +227,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
       if (sock.destroyed) return;
       if (sock.writableLength > MAX_CLIENT_BUFFER) {
         state.event('rover.overflow', { serial, mount });
+        client.endReason = 'dropped: could not keep up with the data';
         sock.destroy();
         return;
       }
@@ -247,7 +249,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
   }
   // Dead rovers are detected by TCP keepalive (set on accept) or a failed write.
   sock.on('data', handleIncoming);
-  sock.on('close', () => state.removeClient(client, 'closed'));
+  sock.on('close', () => state.removeClient(client, 'connection closed'));
   if (rest.length) handleIncoming(rest);
   sock.resume();
 }

@@ -77,6 +77,22 @@
           <label>Password (chosen by the user)
             <input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="64">
           </label>
+          <fieldset class="profile-fields">
+            <legend>Company</legend>
+            <label>Company name <input name="companyName" autocomplete="off" maxlength="120" placeholder="e.g. Acme Civil"></label>
+            <div class="two">
+              <label>Phone <input name="companyPhone" type="tel" autocomplete="off" maxlength="30"></label>
+              <label>Email <input name="companyEmail" type="email" autocomplete="off" maxlength="120"></label>
+            </div>
+          </fieldset>
+          <fieldset class="profile-fields">
+            <legend>Operator</legend>
+            <label>Operator name <input name="operatorName" autocomplete="off" maxlength="120" placeholder="e.g. Sam Taylor"></label>
+            <div class="two">
+              <label>Phone <input name="operatorPhone" type="tel" autocomplete="off" maxlength="30"></label>
+              <label>Email <input name="operatorEmail" type="email" autocomplete="off" maxlength="120"></label>
+            </div>
+          </fieldset>
           <fieldset>
             <legend>Allowed mountpoints <span class="hint">(none ticked = all)</span></legend>
             <div id="mountChecks" class="checks"></div>
@@ -93,6 +109,35 @@
       <div class="tab-body hidden" id="tab-log"><ol class="log" id="logList"></ol></div>
     </aside>
   </main>
+
+  <dialog id="historyDlg" class="history-dlg">
+    <div class="history-head">
+      <div style="min-width:0">
+        <h3 id="historyTitle">Online history</h3>
+        <div class="card-sub" id="historySub"></div>
+      </div>
+      <button class="icon-btn" id="historyClose" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="history-contacts" id="historyContacts"></div>
+    <div class="history-tools">
+      <label>Show
+        <select id="historyRange">
+          <option value="1">Last 24 hours</option>
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last year</option>
+          <option value="0">Everything kept</option>
+        </select>
+      </label>
+      <label class="inline"><input type="checkbox" id="historyRejected" checked> Refused logins</label>
+      <button class="small-btn" id="historyCsv">Export CSV</button>
+    </div>
+    <div class="history-stats" id="historyStats"></div>
+    <div class="history-table-wrap"><table class="history-table" id="historyTable"></table></div>
+  </dialog>
 
   <dialog id="settingsDlg">
     <form method="dialog" id="settingsForm">

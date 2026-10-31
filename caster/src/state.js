@@ -62,12 +62,13 @@ export class CasterState extends EventEmitter {
     for (const other of this.clients.values()) {
       if (other.serial === client.serial) {
         this.event('rover.replaced', { serial: client.serial, oldAddr: other.addr });
+        other.endReason = 'replaced by a new connection from the same receiver';
         other.close();
       }
     }
     Object.assign(client, {
       connectedAt: Date.now(), bytesOut: 0, lastBytes: 0, rateBps: 0,
-      gga: null, ggaAt: null, track: [],
+      gga: null, ggaAt: null, track: [], fixMs: {}, firstPos: null,
     });
     this.clients.set(client.id, client);
     this.event('rover.connected', {
@@ -78,12 +79,59 @@ export class CasterState extends EventEmitter {
 
   removeClient(client, reason) {
     if (!this.clients.delete(client.id)) return;
+    reason = client.endReason || reason;
     this.event('rover.disconnected', { id: client.id, serial: client.serial, mount: client.mount, reason });
+    this.history?.append(client.serial, this.sessionRecord(client, reason));
+  }
+
+  /** Adds the time since the last GGA to the fix type it reported (gaps over 30 s count as no position). */
+  accountFix(client, now) {
+    if (!client.ggaAt) return;
+    const dt = now - client.ggaAt;
+    const q = client.gga?.hasPosition ? client.gga.quality : 0;
+    const counted = Math.min(dt, 30_000);
+    client.fixMs[q] = (client.fixMs[q] || 0) + counted;
+    if (dt > counted) client.fixMs.gap = (client.fixMs.gap || 0) + (dt - counted);
+  }
+
+  /** What is kept in the rover's online history when a session ends. */
+  sessionRecord(client, reason) {
+    const end = Date.now();
+    this.accountFix(client, end);
+    const f = client.fixMs;
+    const sec = ms => Math.round((ms || 0) / 1000);
+    const other = Object.entries(f).filter(([k]) => !['0', '4', '5', 'gap'].includes(k)).reduce((a, [, v]) => a + v, 0);
+    const last = client.gga?.hasPosition ? client.gga : null;
+    return {
+      type: 'session',
+      start: client.connectedAt,
+      end,
+      durationSec: sec(end - client.connectedAt),
+      mount: client.mount,
+      label: client.label,
+      protocol: client.protocol,
+      addr: client.addr,
+      agent: client.agent,
+      bytes: client.bytesOut,
+      endReason: reason,
+      sentPosition: !!client.ggaAt,
+      fixSec: { fixed: sec(f[4]), float: sec(f[5]), other: sec(other), none: sec((f[0] || 0) + (f.gap || 0)) },
+      firstPos: client.firstPos,
+      lastPos: last ? [Number(last.lat.toFixed(7)), Number(last.lon.toFixed(7))] : null,
+    };
+  }
+
+  /** A refused login for a known rover, kept in its history. */
+  recordRejected(serial, data) {
+    this.history?.append(serial, { type: 'rejected', time: Date.now(), ...data });
   }
 
   updateGga(client, gga) {
+    const now = Date.now();
+    this.accountFix(client, now);
     client.gga = gga;
-    client.ggaAt = Date.now();
+    client.ggaAt = now;
+    if (gga.hasPosition && !client.firstPos) client.firstPos = [Number(gga.lat.toFixed(7)), Number(gga.lon.toFixed(7))];
     if (gga.hasPosition) {
       const last = client.track[client.track.length - 1];
       if (!last || Math.abs(last[0] - gga.lat) > 1e-7 || Math.abs(last[1] - gga.lon) > 1e-7) {

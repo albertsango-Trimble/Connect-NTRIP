@@ -9,7 +9,7 @@ import { RangeClient } from './core/geotiffTiles';
 import { initGeoreference } from './core/geo';
 import { chooseSource } from './ui/sourceDialog';
 import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
-import type { CasterMessage, Device, LogEvent, Mountpoint, Receiver, Rover } from './types';
+import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord } from './types';
 
 const STALE_MS = 15_000;
 const FIX_COLOURS: Record<number, string> = { 0: '--q0', 1: '--q1', 2: '--q2', 3: '--q1', 4: '--q4', 5: '--q5', 6: '--q1', 7: '--q1', 8: '--q1', 9: '--q2' };
@@ -17,6 +17,36 @@ const FIX_NAMES: Record<number, string> = { 0: 'No fix', 1: 'Autonomous', 2: 'DG
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+/**
+ * Updates `el` to match `html`, changing only the parts that differ. The lists are redrawn every second
+ * with fresh numbers; replacing them wholesale would swallow clicks on their buttons mid-click.
+ */
+function morph(el: HTMLElement, html: string) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  syncChildren(el, tpl.content);
+}
+function syncChildren(target: Node, source: Node) {
+  const next = [...source.childNodes];
+  let i = 0;
+  for (; i < next.length; i++) {
+    const want = next[i];
+    const have = target.childNodes[i];
+    if (!have) { target.appendChild(want.cloneNode(true)); continue; }
+    if (have.nodeType !== want.nodeType || have.nodeName !== want.nodeName) { target.replaceChild(want.cloneNode(true), have); continue; }
+    if (want.nodeType !== Node.ELEMENT_NODE) {
+      if (have.nodeValue !== want.nodeValue) have.nodeValue = want.nodeValue;
+      continue;
+    }
+    const h = have as Element, w = want as Element;
+    if (h.outerHTML === w.outerHTML) continue;
+    for (const a of [...h.attributes]) if (!w.hasAttribute(a.name)) h.removeAttribute(a.name);
+    for (const a of [...w.attributes]) if (h.getAttribute(a.name) !== a.value) h.setAttribute(a.name, a.value);
+    syncChildren(h, w);
+  }
+  while (target.childNodes.length > next.length) target.removeChild(target.lastChild!);
+}
+
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 // ------------------------------------------------------------------ settings
@@ -141,6 +171,19 @@ async function restoreSharedGeoTiffs(project: ProjectFiles, projectId: string, s
 const serverNow = () => Date.now() + app.serverOffset;
 const isStale = (r: Rover) => !r.ggaAt || serverNow() - r.ggaAt > STALE_MS;
 const roverName = (r: Rover) => r.label || r.serial;
+const deviceOf = (serial: string) => app.devices.find((d) => d.serial === serial);
+
+const tel = (v: string) => `<a href="tel:${esc(v.replace(/[^0-9+]/g, ''))}">${esc(v)}</a>`;
+const mail = (v: string) => `<a href="mailto:${esc(v)}">${esc(v)}</a>`;
+/** One line per person: "Operator · name · phone · email" with call and email links. */
+function profileLines(p: Profile | undefined) {
+  if (!p) return '';
+  const line = (role: string, name: string, phone: string, email: string) =>
+    name || phone || email
+      ? `<div class="profile-line"><span class="role">${role}</span>${name ? `<span class="who">${esc(name)}</span>` : ''}${phone ? tel(phone) : ''}${email ? mail(email) : ''}</div>`
+      : '';
+  return line('Company', p.companyName, p.companyPhone, p.companyEmail) + line('Operator', p.operatorName, p.operatorPhone, p.operatorEmail);
+}
 function roverColour(r: Rover) {
   if (!r.gga || !r.gga.hasPosition || isStale(r)) return css('--stale');
   return css(FIX_COLOURS[r.gga.quality] || '--q1');
@@ -239,10 +282,20 @@ function duration(ms: number) {
 const rate = (bps: number) => (bps >= 1024 ? `${(bps / 1024).toFixed(1)} kB/s` : `${bps} B/s`);
 const bytes = (n: number) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${(n / 1024).toFixed(0)} kB` : `${n} B`);
 
+function popupPeople(p: Profile | undefined) {
+  if (!p) return '';
+  const cell = (name: string, phone: string, email: string) => [name && esc(name), phone && tel(phone), email && mail(email)].filter(Boolean).join('<br>');
+  return [
+    p.companyName || p.companyPhone || p.companyEmail ? `<tr><td>Company</td><td>${cell(p.companyName, p.companyPhone, p.companyEmail)}</td></tr>` : '',
+    p.operatorName || p.operatorPhone || p.operatorEmail ? `<tr><td>Operator</td><td>${cell(p.operatorName, p.operatorPhone, p.operatorEmail)}</td></tr>` : '',
+  ].join('');
+}
+
 function roverPopup(r: Rover) {
   const g = r.gga;
   return `<b>${esc(roverName(r))}</b><table>
     <tr><td>Serial</td><td>${esc(r.serial)}</td></tr>
+    ${popupPeople(deviceOf(r.serial)?.profile)}
     <tr><td>Mountpoint</td><td>${esc(r.mount)}</td></tr>
     <tr><td>Fix</td><td>${esc(g?.fix || '—')}</td></tr>
     <tr><td>Satellites</td><td>${g?.sats ?? '—'}</td></tr>
@@ -392,10 +445,10 @@ function renderRovers() {
   const el = $('#tab-rovers');
   const rovers = [...app.rovers.values()].sort((a, b) => roverName(a).localeCompare(roverName(b)));
   if (!rovers.length) {
-    el.innerHTML = `<div class="empty">No machines connected.<br>Rovers appear here as soon as they log in to a mountpoint.</div>`;
+    morph(el, `<div class="empty">No machines connected.<br>Rovers appear here as soon as they log in to a mountpoint.</div>`);
     return;
   }
-  el.innerHTML = rovers
+  morph(el, rovers
     .map((r) => {
       const g = r.gga;
       const stale = isStale(r);
@@ -419,12 +472,13 @@ function renderRovers() {
           <div><span>Connected</span><b>${duration(serverNow() - r.connectedAt)}</b></div>
           <div><span>Last position</span><b>${sinceGga}</b></div>
         </div>
+        ${profileLines(deviceOf(r.serial)?.profile)}
         ${!g ? '<div class="warn">Receiving corrections, but this rover isn\'t sending its position (GGA). Turn on "send NMEA GGA to caster" on the receiver to see it on the map.</div>' : ''}
         <div class="card-sub" style="margin-top:6px">${esc(r.protocol)} · ${esc(r.addr)}${r.agent ? ` · ${esc(r.agent)}` : ''}
-          <button class="link-btn danger" data-kick="${esc(r.id)}" style="float:right">Disconnect</button></div>
+          <span style="float:right"><button class="link-btn" data-history="${esc(r.serial)}">History</button><button class="link-btn danger" data-kick="${esc(r.id)}">Disconnect</button></span></div>
       </div>`;
     })
-    .join('');
+    .join(''));
 }
 
 function receiverStatus(r: Receiver) {
@@ -458,7 +512,7 @@ function renderBases() {
     el.innerHTML = '<div class="empty">No mountpoints configured on the caster.</div>';
     return;
   }
-  el.innerHTML = renderReceivers() + app.mountpoints
+  morph(el, renderReceivers() + app.mountpoints
     .map(
       (m) => `
     <div class="card">
@@ -481,7 +535,7 @@ function renderBases() {
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
     </div>`,
     )
-    .join('');
+    .join(''));
 }
 
 function renderDevices() {
@@ -508,8 +562,10 @@ function renderDevices() {
           <div class="card-sub">${esc(d.serial)}</div></div>
         <div class="right">${d.enabled ? '' : '<span class="tag">Disabled</span>'}</div>
       </div>
+      ${profileLines(d.profile)}
       <div class="card-sub" style="margin-top:4px">Mountpoints: ${d.mountpoints.length ? d.mountpoints.map(esc).join(', ') : 'all'}</div>
       <div class="actions">
+        <button class="link-btn" data-history="${esc(d.serial)}">History</button>
         <button class="link-btn" data-edit="${esc(d.serial)}">Edit</button>
         <button class="link-btn" data-toggle="${esc(d.serial)}">${d.enabled ? 'Disable' : 'Enable'}</button>
         <button class="link-btn danger" data-delete="${esc(d.serial)}">Delete</button>
@@ -654,6 +710,7 @@ function handleMessage(msg: CasterMessage) {
   } else if (msg.type === 'devices') {
     app.devices = msg.devices;
     renderDevices();
+    renderRovers();
   }
 }
 
@@ -679,6 +736,7 @@ document.querySelectorAll<HTMLButtonElement>('.tabs button').forEach((btn) =>
 
 $('#tab-rovers').addEventListener('click', async (e) => {
   const target = e.target as HTMLElement;
+  if (target.closest('[data-history], a')) return; // handled below / normal links
   const kick = target.closest<HTMLElement>('[data-kick]');
   if (kick) {
     e.stopPropagation();
@@ -699,6 +757,8 @@ $('#tab-rovers').addEventListener('click', async (e) => {
 $('#trailsToggle').addEventListener('change', renderMap);
 $('#labelsToggle').addEventListener('change', renderMap);
 $('#fitBtn').addEventListener('click', () => fitAll(false));
+
+const PROFILE_KEYS = ['companyName', 'companyPhone', 'companyEmail', 'operatorName', 'operatorPhone', 'operatorEmail'] as const;
 
 // login form
 const form = $<HTMLFormElement>('#deviceForm');
@@ -724,7 +784,8 @@ field('password').required = true;
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const mountpoints = [...$('#mountChecks').querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value);
-  const body: Record<string, unknown> = { label: field('label').value.trim(), mountpoints, enabled: field('enabled').checked };
+  const profile = Object.fromEntries(PROFILE_KEYS.map((k) => [k, field(k).value.trim()]));
+  const body: Record<string, unknown> = { label: field('label').value.trim(), mountpoints, enabled: field('enabled').checked, profile };
   if (field('password').value) body.password = field('password').value;
   try {
     if (app.editing) {
@@ -747,6 +808,7 @@ $('#deviceCancel').addEventListener('click', () => {
 
 $('#deviceList').addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
+  if (t.dataset.history) return;
   const serial = t.dataset.edit || t.dataset.toggle || t.dataset.delete;
   if (!serial) return;
   const d = app.devices.find((x) => x.serial === serial);
@@ -760,6 +822,7 @@ $('#deviceList').addEventListener('click', async (e) => {
     field('password').required = false;
     field('password').placeholder = 'Leave blank to keep current password';
     field('enabled').checked = d.enabled;
+    for (const k of PROFILE_KEYS) field(k).value = d.profile?.[k] ?? '';
     $('#mountChecks').querySelectorAll<HTMLInputElement>('input').forEach((i) => (i.checked = d.mountpoints.includes(i.value)));
     $('#deviceFormTitle').textContent = `Edit ${serial}`;
     $('#deviceSubmit').textContent = 'Save changes';
@@ -855,6 +918,139 @@ document.addEventListener('click', (e) => {
   if (!t) return;
   if (t.dataset.webui) void openWebUi(t.dataset.webui);
   else if (t.dataset.webuiTab) void openWebUiTab(t.dataset.webuiTab);
+});
+
+// ------------------------------------------------------------------ online history
+const historyDlg = $<HTMLDialogElement>('#historyDlg');
+let historySerial: string | null = null;
+let historyData: HistoryReply | null = null;
+
+const hms = (sec: number) => {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = Math.floor(sec % 60);
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(s2).padStart(2, '0')}s` : `${s2}s`;
+};
+const when = (ms: number) => new Date(ms).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
+
+function fixBar(f: SessionRecord['fixSec']) {
+  const total = f.fixed + f.float + f.other + f.none;
+  if (!total) return '<span class="sub">no position sent</span>';
+  const seg = (v: number, colour: string, label: string) => (v ? `<i style="width:${(v / total) * 100}%;background:${colour}" title="${label}: ${hms(v)} (${Math.round((v / total) * 100)}%)"></i>` : '');
+  return `<div class="fixbar">${seg(f.fixed, css('--q4'), 'RTK fixed')}${seg(f.float, css('--q5'), 'Float')}${seg(f.other, css('--q2'), 'DGPS/autonomous')}${seg(f.none, css('--stale'), 'No position')}</div>
+    <div class="sub">${Math.round((f.fixed / total) * 100)}% fixed</div>`;
+}
+
+function renderHistory() {
+  const data = historyData;
+  if (!data) return;
+  const d = data.device;
+  const p = d.profile;
+  $('#historyTitle').textContent = `${d.label || d.serial} — online history`;
+  $('#historySub').textContent = `${d.serial}${d.mountpoints.length ? ` · ${d.mountpoints.join(', ')}` : ''}${d.enabled ? '' : ' · login disabled'}`;
+  const contact = (k: string, name: string, phone: string, email: string) =>
+    `<div class="contact-card"><div class="k">${k}</div>${name ? `<b>${esc(name)}</b><br>` : '<span class="sub">No name</span><br>'}${phone ? `${tel(phone)}<br>` : ''}${email ? mail(email) : ''}</div>`;
+  $('#historyContacts').innerHTML = contact('Company', p.companyName, p.companyPhone, p.companyEmail) + contact('Operator', p.operatorName, p.operatorPhone, p.operatorEmail);
+
+  const showRejected = $<HTMLInputElement>('#historyRejected').checked;
+  const sessions = data.records.filter((r): r is SessionRecord => r.type === 'session');
+  const rejected = data.records.filter((r) => r.type === 'rejected');
+  const online = sessions.reduce((a, r) => a + r.durationSec, 0) + data.live.reduce((a, r) => a + (serverNow() - r.connectedAt) / 1000, 0);
+  const fix = sessions.reduce((a, r) => ({ fixed: a.fixed + r.fixSec.fixed, float: a.float + r.fixSec.float, other: a.other + r.fixSec.other, none: a.none + r.fixSec.none }), { fixed: 0, float: 0, other: 0, none: 0 });
+  const totalBytes = sessions.reduce((a, r) => a + r.bytes, 0) + data.live.reduce((a, r) => a + r.bytesOut, 0);
+  const lastSeen = data.live.length ? 'Online now' : sessions[0] ? when(sessions[0].end) : '—';
+  $('#historyStats').innerHTML = `
+    <div class="stat"><b>${sessions.length + data.live.length}</b><span>Sessions</span></div>
+    <div class="stat"><b>${hms(online)}</b><span>Time online</span></div>
+    <div class="stat"><b>${bytes(totalBytes)}</b><span>Corrections sent</span></div>
+    <div class="stat"><span>Fix quality</span>${fixBar(fix)}</div>
+    <div class="stat"><b>${rejected.length}</b><span>Refused logins</span></div>
+    <div class="stat"><b style="font-size:13px">${esc(lastSeen)}</b><span>Last online</span></div>`;
+
+  const rows: string[] = [];
+  for (const r of data.live) {
+    rows.push(`<tr class="live"><td class="num">${when(r.connectedAt)}<div class="sub">online now</div></td><td class="num">${hms((serverNow() - r.connectedAt) / 1000)}</td><td>${esc(r.mount)}<div class="sub hide-sm">${esc(r.protocol)}</div></td>
+      <td>${r.gga ? esc(r.gga.fix) : '<span class="sub">no position sent</span>'}</td><td class="num">${bytes(r.bytesOut)}</td><td class="hide-sm">${esc(r.addr)}</td><td>Connected</td></tr>`);
+  }
+  for (const r of data.records as HistoryRecord[]) {
+    if (r.type === 'rejected') {
+      if (!showRejected) continue;
+      rows.push(`<tr class="rejected"><td class="num">${when(r.time)}</td><td></td><td>${esc(r.mount)}</td><td colspan="2">Login refused</td><td class="hide-sm">${esc(r.addr)}</td><td>${esc(r.reason)}</td></tr>`);
+    } else {
+      rows.push(`<tr><td class="num">${when(r.start)}<div class="sub">to ${sameDay(r.start, r.end) ? clock(r.end) : when(r.end)}</div></td><td class="num">${hms(r.durationSec)}</td>
+        <td>${esc(r.mount)}<div class="sub hide-sm">${esc(r.protocol)}</div></td><td>${fixBar(r.fixSec)}</td><td class="num">${bytes(r.bytes)}</td>
+        <td class="hide-sm">${esc(r.addr)}${r.agent ? `<div class="sub">${esc(r.agent)}</div>` : ''}</td><td>${esc(r.endReason)}</td></tr>`);
+    }
+  }
+  const range = data.days ? `the last ${data.days === 1 ? '24 hours' : `${data.days} days`}` : 'the history kept';
+  $('#historyTable').innerHTML = `<thead><tr><th>Connected</th><th>Duration</th><th>Mountpoint</th><th>Fix</th><th>Data</th><th class="hide-sm">From</th><th>Ended</th></tr></thead>
+    <tbody>${rows.join('') || `<tr><td colspan="7" class="empty">No connections in ${range}.</td></tr>`}</tbody>`;
+}
+
+async function loadHistory() {
+  if (!historySerial) return;
+  const days = $<HTMLSelectElement>('#historyRange').value;
+  $('#historyTable').innerHTML = '<tbody><tr><td class="empty">Loading…</td></tr></tbody>';
+  try {
+    historyData = (await api('GET', `/api/devices/${encodeURIComponent(historySerial)}/history?days=${days}`)) as unknown as HistoryReply;
+    renderHistory();
+  } catch (err) {
+    $('#historyTable').innerHTML = `<tbody><tr><td class="empty">Couldn't load the history: ${esc((err as Error).message)}</td></tr></tbody>`;
+  }
+}
+
+function openHistory(serial: string) {
+  historySerial = serial;
+  historyData = null;
+  const d = deviceOf(serial);
+  $('#historyTitle').textContent = `${d?.label || serial} — online history`;
+  $('#historySub').textContent = serial;
+  $('#historyContacts').innerHTML = '';
+  $('#historyStats').innerHTML = '';
+  if (!historyDlg.open) historyDlg.showModal();
+  void loadHistory();
+}
+
+function historyCsv() {
+  const data = historyData;
+  if (!data) return;
+  const q = (v: unknown) => {
+    const t = String(v ?? '');
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const p = data.device.profile;
+  const head = ['Serial', 'Machine', 'Company', 'Company phone', 'Company email', 'Operator', 'Operator phone', 'Operator email', 'Type', 'Start (UTC)', 'End (UTC)', 'Duration (s)', 'Mountpoint', 'Protocol', 'Address', 'Receiver software', 'Data sent (bytes)', 'RTK fixed (s)', 'Float (s)', 'Other fix (s)', 'No position (s)', 'Ended / reason', 'First lat', 'First lon', 'Last lat', 'Last lon'];
+  const who = [data.device.serial, data.device.label, p.companyName, p.companyPhone, p.companyEmail, p.operatorName, p.operatorPhone, p.operatorEmail];
+  const lines = [head.map(q).join(',')];
+  for (const r of data.live) lines.push([...who, 'online now', iso(r.connectedAt), '', Math.round((serverNow() - r.connectedAt) / 1000), r.mount, r.protocol, r.addr, r.agent, r.bytesOut, '', '', '', '', 'still connected', '', '', r.gga?.lat ?? '', r.gga?.lon ?? ''].map(q).join(','));
+  for (const r of data.records) {
+    if (r.type === 'rejected') lines.push([...who, 'login refused', iso(r.time), '', '', r.mount, '', r.addr, r.agent ?? '', '', '', '', '', '', r.reason, '', '', '', ''].map(q).join(','));
+    else lines.push([...who, 'session', iso(r.start), iso(r.end), r.durationSec, r.mount, r.protocol, r.addr, r.agent ?? '', r.bytes, r.fixSec.fixed, r.fixSec.float, r.fixSec.other, r.fixSec.none, r.endReason, r.firstPos?.[0] ?? '', r.firstPos?.[1] ?? '', r.lastPos?.[0] ?? '', r.lastPos?.[1] ?? ''].map(q).join(','));
+  }
+  const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${data.device.serial}-online-history-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+$('#historyClose').addEventListener('click', () => historyDlg.close());
+$('#historyRange').addEventListener('change', () => void loadHistory());
+$('#historyRejected').addEventListener('change', renderHistory);
+$('#historyCsv').addEventListener('click', historyCsv);
+historyDlg.addEventListener('click', (e) => {
+  if (e.target === historyDlg) historyDlg.close(); // click on the backdrop
+});
+document.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-history]');
+  if (t?.dataset.history) {
+    e.stopPropagation();
+    openHistory(t.dataset.history);
+  }
 });
 
 // settings

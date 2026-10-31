@@ -30,7 +30,8 @@ base and every machine receiving corrections on a live map.
 - Map: base(s) as purple triangles, machines as dots coloured by fix (green fixed, orange float, blue DGPS, grey autonomous/stale), optional trails and labels.
 - Machines tab: each connected rover with fix, satellites, HDOP, correction age, data rate, time connected, and a Disconnect button.
 - Bases tab: each base receiver (with its **web UI**, opened inside the extension) and each mountpoint's status, data rate, RTCM message types seen, machines on it.
-- Logins tab: add/edit/disable/delete rover logins.
+- Logins tab: add/edit/disable/delete rover logins, each with a **company** (name, phone, email) and **operator** (name, phone, email). These show on the machine's card and map popup with tap-to-call and email links.
+- **Online history** per rover (History button on a machine or login): every connection with start/end, duration, mountpoint, fix quality over the session, data sent, address and why it ended, plus refused logins; filter by period and export to CSV.
 - Log tab: connections, refused logins (with reason), base drop-outs.
 
 ## 1. Set up the VM
@@ -101,7 +102,7 @@ If someone's browser blocks cookies for pages embedded in other sites, the panel
 
 ## 3. Set up rovers
 
-1. In the extension's **Logins** tab, add the receiver's serial number, a machine name, and the password the user picked. Optionally tick the mountpoints it may use.
+1. In the extension's **Logins** tab, add the receiver's serial number, a machine name, the password the user picked, and the company and operator contact details. Optionally tick the mountpoints it may use.
 2. On the rover / machine control system: caster `caster.yourdomain.com:2101`, mountpoint as above, username = serial number, password = theirs.
 3. **Turn on sending the NMEA GGA position to the caster.** Without it the machine still gets corrections and appears in the Machines list, but can't be shown on the map.
 
@@ -142,5 +143,6 @@ Then `cd extension && npm install && npm run dev`, open http://localhost:5173, a
 - **NTRIP credentials travel in clear text** (Basic auth over plain TCP), which is how NTRIP works and what rovers expect. Use per-machine passwords, not passwords people reuse elsewhere.
 - Dead rover connections are detected by TCP keepalive, so a machine that loses signal can take a minute or two to drop off the list. Its marker turns grey after 15 s without a position.
 - A base that sends nothing for `sourceIdleTimeoutSec` (default 60 s) is disconnected so it can reconnect cleanly.
+- Online history is kept for `historyDays` (default 365; 0 keeps everything) in `/var/lib/connect-ntrip/history/<serial>.jsonl`. Deleting a login keeps its history; adding the same serial again brings it back. Editing names or contact details doesn't disconnect a machine; disabling it, changing its password or removing its mountpoint does.
 - Each base web UI session lasts 8 hours and is tied to one receiver. Openings are recorded in the Log tab.
 - The Trimble Connect API host list (`tcApiHosts`) covers the regional Connect servers; the first one that accepts the token is used.

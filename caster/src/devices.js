@@ -15,6 +15,29 @@ export function validateSerial(serial) {
   return /^[A-Z0-9\-_]{3,40}$/.test(serial);
 }
 
+// Company and operator details kept with each rover login.
+export const PROFILE_FIELDS = {
+  companyName: 'Company name',
+  companyPhone: 'Company phone',
+  companyEmail: 'Company email',
+  operatorName: 'Operator name',
+  operatorPhone: 'Operator phone',
+  operatorEmail: 'Operator email',
+};
+
+function cleanProfile(input, existing = {}) {
+  const out = { ...existing };
+  if (!input || typeof input !== 'object') return out;
+  for (const [key, label] of Object.entries(PROFILE_FIELDS)) {
+    if (input[key] === undefined) continue;
+    const v = String(input[key] ?? '').trim().slice(0, 120);
+    if (v && key.endsWith('Email') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw new UserError(`${label} doesn't look like an email address`);
+    if (v && key.endsWith('Phone') && !/^[0-9+()\-.\s]{4,30}$/.test(v)) throw new UserError(`${label} should be a phone number (digits, spaces, + - ( ) only)`);
+    out[key] = v;
+  }
+  return out;
+}
+
 export function validatePassword(pw) {
   return typeof pw === 'string' && pw.length >= 6 && pw.length <= 64 && /^[\x20-\x7E]+$/.test(pw);
 }
@@ -57,7 +80,7 @@ export class DeviceStore {
     return d ? publicView(normaliseSerial(serial), d) : null;
   }
 
-  add({ serial, password, label = '', mountpoints = [], enabled = true }) {
+  add({ serial, password, label = '', mountpoints = [], enabled = true, profile }) {
     serial = normaliseSerial(serial);
     if (!validateSerial(serial)) throw new UserError('Serial number must be 3-40 letters, digits, - or _');
     if (this.devices[serial]) throw new UserError(`Device ${serial} already exists`);
@@ -67,6 +90,7 @@ export class DeviceStore {
       label: String(label).slice(0, 80),
       mountpoints: Array.isArray(mountpoints) ? mountpoints.map(String) : [],
       enabled: !!enabled,
+      profile: cleanProfile(profile),
       created: new Date().toISOString(),
       updated: new Date().toISOString(),
     };
@@ -74,7 +98,7 @@ export class DeviceStore {
     return this.get(serial);
   }
 
-  update(serial, { password, label, mountpoints, enabled }) {
+  update(serial, { password, label, mountpoints, enabled, profile }) {
     serial = normaliseSerial(serial);
     const d = this.devices[serial];
     if (!d) throw new UserError(`Device ${serial} not found`, 404);
@@ -85,6 +109,7 @@ export class DeviceStore {
     if (label !== undefined) d.label = String(label).slice(0, 80);
     if (mountpoints !== undefined) d.mountpoints = Array.isArray(mountpoints) ? mountpoints.map(String) : [];
     if (enabled !== undefined) d.enabled = !!enabled;
+    if (profile !== undefined) d.profile = cleanProfile(profile, d.profile);
     d.updated = new Date().toISOString();
     this.save();
     return this.get(serial);
@@ -112,7 +137,11 @@ export class DeviceStore {
 }
 
 function publicView(serial, d) {
-  return { serial, label: d.label, mountpoints: d.mountpoints, enabled: d.enabled, created: d.created, updated: d.updated };
+  return { serial, label: d.label, mountpoints: d.mountpoints, enabled: d.enabled, profile: { ...emptyProfile(), ...(d.profile || {}) }, created: d.created, updated: d.updated };
+}
+
+function emptyProfile() {
+  return Object.fromEntries(Object.keys(PROFILE_FIELDS).map(k => [k, '']));
 }
 
 export class UserError extends Error {

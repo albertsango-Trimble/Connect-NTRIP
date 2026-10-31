@@ -50,11 +50,21 @@ export interface Mountpoint {
   rovers: number;
 }
 
+export interface Profile {
+  companyName: string;
+  companyPhone: string;
+  companyEmail: string;
+  operatorName: string;
+  operatorPhone: string;
+  operatorEmail: string;
+}
+
 export interface Device {
   serial: string;
   label: string;
   mountpoints: string[];
   enabled: boolean;
+  profile: Profile;
   created: string;
   updated: string;
 }
@@ -69,6 +79,45 @@ export interface LogEvent {
   reason?: string;
   by?: string;
   [key: string]: unknown;
+}
+
+/** A finished connection in a rover's online history */
+export interface SessionRecord {
+  type: 'session';
+  start: number;
+  end: number;
+  durationSec: number;
+  mount: string;
+  label?: string;
+  protocol: string;
+  addr: string;
+  agent?: string;
+  bytes: number;
+  endReason: string;
+  sentPosition: boolean;
+  fixSec: { fixed: number; float: number; other: number; none: number };
+  firstPos: [number, number] | null;
+  lastPos: [number, number] | null;
+}
+
+/** A refused login attempt by a known rover */
+export interface RejectedRecord {
+  type: 'rejected';
+  time: number;
+  mount: string;
+  addr: string;
+  reason: string;
+  agent?: string;
+}
+
+export type HistoryRecord = SessionRecord | RejectedRecord;
+
+export interface HistoryReply {
+  device: Device;
+  days: number;
+  keepDays: number;
+  live: Rover[];
+  records: HistoryRecord[];
 }
 
 /** A base receiver whose own web interface can be opened through the caster */

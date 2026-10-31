@@ -11,7 +11,7 @@ import { isReceiverHost, startLink } from './webui.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
 
-export function startDashboard({ config, state, devices, tokens }) {
+export function startDashboard({ config, state, devices, tokens, history }) {
   const authCache = new Map(); // sha256(token) -> { user, expires }
 
   async function authenticate(token) {
@@ -106,6 +106,17 @@ export function startDashboard({ config, state, devices, tokens }) {
         return send(res, 200, config.mountpoints.map(m => state.sourceView(m)));
       }
 
+      // GET /api/devices/:serial/history?days=30  (days=0 for everything kept)
+      if (req.method === 'GET' && parts[1] === 'devices' && parts[3] === 'history') {
+        const serial = normaliseSerial(decodeURIComponent(parts[2]));
+        const device = devices.get(serial);
+        if (!device) return send(res, 404, { error: `Device ${serial} not found` });
+        const days = Math.max(0, Number(url.searchParams.get('days') ?? 30));
+        const fromMs = days ? Date.now() - days * 86_400_000 : 0;
+        const live = [...state.clients.values()].filter(c => c.serial === serial).map(c => state.clientView(c, false));
+        return send(res, 200, { device, days, keepDays: config.historyDays, live, records: history.read(serial, { fromMs }) });
+      }
+
       // /api/devices[/:serial]
       if (parts[1] === 'devices') {
         const serial = parts[2] ? normaliseSerial(decodeURIComponent(parts[2])) : null;
@@ -121,15 +132,28 @@ export function startDashboard({ config, state, devices, tokens }) {
           const d = devices.update(serial, body);
           state.event('device.updated', { serial, by: user.email, fields: Object.keys(body).filter(k => k !== 'password').concat(body.password ? ['password'] : []) });
           // Kick live sessions if the device was disabled or its password changed
-          if (body.enabled === false || body.password !== undefined || body.mountpoints !== undefined) {
-            for (const c of state.clients.values()) if (c.serial === serial) c.close();
+          // Only drop a live connection when it is no longer allowed: login disabled, password changed,
+          // or its mountpoint taken off the list. Editing names and contact details leaves it connected.
+          for (const c of state.clients.values()) {
+            if (c.serial !== serial) continue;
+            let why = null;
+            if (!d.enabled) why = `login disabled by ${user.email}`;
+            else if (body.password) why = `password changed by ${user.email}`;
+            else if (d.mountpoints.length && !d.mountpoints.includes(c.mount)) why = `${c.mount} removed from the login by ${user.email}`;
+            if (why) { c.endReason = why; c.close(); }
           }
+          // Keep live machine names in step with the login
+          if (body.label !== undefined) for (const c of state.clients.values()) if (c.serial === serial) c.label = d.label;
           broadcast({ type: 'devices', devices: devices.list() });
           return send(res, 200, d);
         }
         if (req.method === 'DELETE' && serial) {
           devices.remove(serial);
-          for (const c of state.clients.values()) if (c.serial === serial) c.close();
+          for (const c of state.clients.values()) {
+            if (c.serial !== serial) continue;
+            c.endReason = `login deleted by ${user.email}`;
+            c.close();
+          }
           state.event('device.removed', { serial, by: user.email });
           broadcast({ type: 'devices', devices: devices.list() });
           return send(res, 200, { ok: true });
@@ -148,6 +172,7 @@ export function startDashboard({ config, state, devices, tokens }) {
         const c = state.clients.get(parts[2]);
         if (!c) return send(res, 404, { error: 'Rover not connected' });
         state.event('rover.kicked', { serial: c.serial, by: user.email });
+        c.endReason = `disconnected by ${user.email}`;
         c.close();
         return send(res, 200, { ok: true });
       }
