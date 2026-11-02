@@ -4,6 +4,25 @@
  */
 import type { ProjectFiles, ProjectItem } from './projectFiles';
 import type { TilesInfo } from '../core/geotiffTiles';
+import { openJson, sealJson } from './sealedFile';
+
+/** Reads one of the extension's project files; a file saved before encryption is saved again encrypted. */
+async function readFile<T>(project: ProjectFiles, name: string): Promise<T | null> {
+  const root = await project.root();
+  const item = await project.find(root.id, name);
+  if (!item) return null;
+  const { value, sealed } = await openJson<T>(project.projectId, await (await project.download(item)).text());
+  if (!sealed && value) {
+    // Encrypt older plain files the first time they are read (needs permission to write to the project folder)
+    void writeFile(project, name, value).catch(() => undefined);
+  }
+  return value;
+}
+
+async function writeFile(project: ProjectFiles, name: string, value: unknown): Promise<void> {
+  const root = await project.root();
+  await project.writeFile(root.id, name, await sealJson(project.projectId, value));
+}
 
 /** The file the shared base maps are saved in, in the project's top-level folder. */
 export const SHARED_FILE = 'ntrip-caster-map.json';
@@ -30,18 +49,13 @@ export interface SharedMap {
 
 /** Reads the base maps saved with the project, or null if there are none. */
 export async function loadShared(project: ProjectFiles): Promise<SharedMap | null> {
-  const root = await project.root();
-  const item = await project.find(root.id, SHARED_FILE);
-  if (!item) return null;
-  const file = await project.download(item);
-  const data = JSON.parse(await file.text()) as SharedMap;
+  const data = await readFile<SharedMap>(project, SHARED_FILE);
   return data && Array.isArray(data.geotiffs) ? data : null;
 }
 
 /** Saves the base maps into the project so everyone who opens the extension gets them. */
 export async function saveShared(project: ProjectFiles, shared: SharedMap): Promise<void> {
-  const root = await project.root();
-  await project.writeFile(root.id, SHARED_FILE, JSON.stringify(shared));
+  await writeFile(project, SHARED_FILE, shared);
 }
 
 /** Name of the project file holding a shared GeoTIFF's picture. */
@@ -70,14 +84,10 @@ export interface ProjectSettings {
 
 /** Reads the caster connection saved with the project, or null if none has been saved. */
 export async function loadProjectSettings(project: ProjectFiles): Promise<ProjectSettings | null> {
-  const root = await project.root();
-  const item = await project.find(root.id, SETTINGS_FILE);
-  if (!item) return null;
-  const data = JSON.parse(await (await project.download(item)).text()) as ProjectSettings;
+  const data = await readFile<ProjectSettings>(project, SETTINGS_FILE);
   return data && typeof data.casterUrl === 'string' && data.casterUrl ? data : null;
 }
 
 export async function saveProjectSettings(project: ProjectFiles, settings: ProjectSettings): Promise<void> {
-  const root = await project.root();
-  await project.writeFile(root.id, SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  await writeFile(project, SETTINGS_FILE, settings);
 }

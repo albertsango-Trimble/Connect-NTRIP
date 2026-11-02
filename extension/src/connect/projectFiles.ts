@@ -25,7 +25,7 @@ export class ProjectFiles {
   private base: string | null = null;
 
   constructor(
-    private readonly projectId: string,
+    readonly projectId: string,
     private readonly token: () => string | undefined,
     private readonly location?: string,
   ) {}
