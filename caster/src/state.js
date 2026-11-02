@@ -182,7 +182,7 @@ export class CasterState extends EventEmitter {
 
   /**
    * A position for a stream that doesn't carry one (CMR+/CMRx): taken from another stream the same
-   * base is sending right now (same address), which usually carries RTCM 1005/1006.
+   * base is sending right now (same address), which usually carries RTCM 1005/1006 or CMR Type 1.
    */
   sitePosition(src) {
     const host = src.addr?.replace(/:\d+$/, '');
@@ -204,7 +204,7 @@ export class CasterState extends EventEmitter {
       // Remember what was learned while the base is sending, so it is still known after it disconnects
       let changed = false;
       if (detected && m.format !== detected) { m.format = detected; changed = true; }
-      const live = station ? { lat: station.lat, lon: station.lon, h: station.h, from: 'RTCM 1005/1006' } : site;
+      const live = station ? { lat: station.lat, lon: station.lon, h: station.h, from: station.from } : site;
       if (live && (m.lat == null || Math.abs(m.lat - live.lat) > 1e-6 || Math.abs(m.lon - live.lon) > 1e-6 || m.positionFrom !== live.from)) {
         m.lat = live.lat; m.lon = live.lon; m.h = live.h ?? null; m.positionFrom = live.from; changed = true;
       }
@@ -227,7 +227,7 @@ export class CasterState extends EventEmitter {
       rateBps: s?.rateBps || 0,
       messageTypes: s?.monitor ? s.monitor.messageTypes() : [],
       position: station
-        ? { lat: station.lat, lon: station.lon, h: station.h, stationId: station.stationId, antennaHeight: station.antennaHeight, from: 'RTCM 1005/1006' }
+        ? { lat: station.lat, lon: station.lon, h: station.h, stationId: station.stationId, antennaHeight: station.antennaHeight, accuracy: station.accuracy, from: station.from }
         : site ? { lat: site.lat, lon: site.lon, h: site.h ?? null, from: site.from }
         : (m.lat != null && m.lon != null ? { lat: m.lat, lon: m.lon, h: m.h ?? null, from: m.auto ? `${m.positionFrom || 'last known'}` : 'config' } : null),
       rovers: [...this.clients.values()].filter(c => c.mount === m.name).length,

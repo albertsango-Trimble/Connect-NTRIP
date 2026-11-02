@@ -71,6 +71,31 @@ function msg1005(lat, lon, h) {
   return frame(w.buf);
 }
 
+/** CMR Type 1 (reference station coordinates), laid out per the CMR spec Table A.6. */
+function cmrType1(lat, lon, h) {
+  const { x, y, z } = llaToEcef(lat, lon, h);
+  const w = new BitWriter(25);
+  // header: version, station ID, message type, battery, memory, reserved, L2 enabled, reserved, epoch, motion, reserved
+  w.put(3, 3); w.put(7, 5); w.put(1, 3); w.put(0, 1); w.put(0, 1); w.put(0, 1); w.put(1, 1); w.put(0, 1);
+  w.put(Date.now() % 240000, 18); w.put(1, 2); w.put(0, 12);
+  // data: X, antenna height, Y, east offset, Z, north offset (mm), accuracy, reserved
+  w.put(Math.round(x * 1000), 34); w.put(1800, 14);
+  w.put(Math.round(y * 1000), 34); w.put(0, 14);
+  w.put(Math.round(z * 1000), 34); w.put(0, 14);
+  w.put(12, 4); w.put(0, 4);
+  return cmrPacket(0x93, w.buf);
+}
+
+function cmrPacket(type, data) {
+  const f = Buffer.alloc(data.length + 6);
+  f[0] = 0x02; f[1] = 0x00; f[2] = type; f[3] = data.length;
+  data.copy(f, 4);
+  let sum = 0;
+  for (let i = 1; i < 4 + data.length; i++) sum = (sum + f[i]) & 0xff;
+  f[4 + data.length] = sum; f[5 + data.length] = 0x03;
+  return f;
+}
+
 function cmrFrame(type) {
   const len = 60;
   const f = Buffer.alloc(len + 6);
@@ -123,6 +148,7 @@ function startBase() {
     const timer = setInterval(() => {
       const parts = cmrType ? [cmrFrame(cmrType), cmrFrame(cmrType)] : [dummyMsm(1077), dummyMsm(1087), dummyMsm(1097)];
       if (!cmrType && n++ % 5 === 0) parts.unshift(msg1005(baseLat, baseLon, 50));
+      if (cmrType === 0x93 && n++ % 5 === 0) parts.push(cmrType1(baseLat, baseLon, 50));
       const data = Buffer.concat(parts);
       sock.write(v2 ? encodeChunk(data) : data);
     }, 1000);

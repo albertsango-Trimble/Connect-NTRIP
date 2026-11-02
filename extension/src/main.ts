@@ -534,7 +534,7 @@ function renderBases() {
         <div><span>Total in</span><b>${m.online ? bytes(m.bytesIn) : '—'}</b></div>
         <div><span>Last data</span><b>${m.lastDataAt ? `${duration(serverNow() - m.lastDataAt)} ago` : '—'}</b></div>
       </div>
-      ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)})</div>` : ''}
+      ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''})</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
       ${m.auto && !m.online ? `<div class="actions" style="margin-top:6px"><button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button></div>` : ''}

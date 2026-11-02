@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const NAME_RE = /^[A-Za-z0-9_\-]{1,100}$/;
+const FROM_DATA = new Set(['RTCM 1005/1006', 'CMR Type 1']);
 
 export class AutoMountpoints {
   constructor(config) {
@@ -67,7 +68,7 @@ export class AutoMountpoints {
     if (str) {
       if (str.identifier) m.identifier = str.identifier;
       if (str.navSystem) m.navSystem = str.navSystem;
-      if (str.lat != null && str.lon != null && m.positionFrom !== 'RTCM 1005/1006') {
+      if (str.lat != null && str.lon != null && !FROM_DATA.has(m.positionFrom)) {
         m.lat = str.lat; m.lon = str.lon; m.positionFrom = 'base (Ntrip-STR)';
       }
     }
@@ -82,8 +83,8 @@ export class AutoMountpoints {
     let changed = false;
     if (format && m.format !== format) { m.format = format; changed = true; }
     if (station) {
-      m.lat = station.lat; m.lon = station.lon; m.h = station.h; m.positionFrom = 'RTCM 1005/1006'; changed = true;
-    } else if (fallback && m.positionFrom !== 'RTCM 1005/1006' && m.positionFrom !== 'base (Ntrip-STR)') {
+      m.lat = station.lat; m.lon = station.lon; m.h = station.h; m.positionFrom = station.from; changed = true;
+    } else if (fallback && !FROM_DATA.has(m.positionFrom) && m.positionFrom !== 'base (Ntrip-STR)') {
       m.lat = fallback.lat; m.lon = fallback.lon; m.h = fallback.h ?? null; m.positionFrom = fallback.from; changed = true;
     }
     m.lastSeen = new Date().toISOString();

@@ -51,7 +51,7 @@ export interface Mountpoint {
   bytesIn: number;
   rateBps: number;
   messageTypes: number[];
-  position: { lat: number; lon: number; h: number | null; stationId?: number; antennaHeight?: number | null; from: string } | null;
+  position: { lat: number; lon: number; h: number | null; stationId?: number; antennaHeight?: number | null; accuracy?: string; from: string } | null;
   rovers: number;
 }
 
