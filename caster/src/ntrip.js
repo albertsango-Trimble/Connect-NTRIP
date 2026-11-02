@@ -27,7 +27,17 @@ function acceptConnection(sock, ctx) {
   sock.on('error', () => {});
   const addr = `${sock.remoteAddress?.replace(/^::ffff:/, '')}:${sock.remotePort}`;
   let buf = Buffer.alloc(0);
-  const headerTimer = setTimeout(() => sock.destroy(), 15_000);
+  let gotRequest = false;
+  const preview = b => JSON.stringify(b.subarray(0, 120).toString('latin1'));
+  const headerTimer = setTimeout(() => {
+    console.log(`connection from ${addr} sent no complete request within 15 s (${buf.length} bytes: ${preview(buf)})`);
+    sock.destroy();
+  }, 15_000);
+  // A client that disconnects before sending a full request is logged too, with what it did send
+  sock.on('close', () => {
+    clearTimeout(headerTimer);
+    if (!gotRequest) console.log(`connection from ${addr} closed before a complete request (${buf.length} bytes: ${preview(buf)})`);
+  });
 
   const onData = chunk => {
     buf = Buffer.concat([buf, chunk]);
@@ -42,10 +52,15 @@ function acceptConnection(sock, ctx) {
       return;
     }
     clearTimeout(headerTimer);
+    gotRequest = true;
     sock.off('data', onData);
     sock.pause();
     const req = parseRequest(buf.subarray(0, idx).toString('latin1'));
     req.addr = addr;
+    if (req.method !== 'SOURCE' && req.method !== 'POST') {
+      // Rover and sourcetable requests: first line and client name, never the password
+      console.log(`request from ${addr}: ${JSON.stringify(buf.subarray(0, idx).toString('latin1').split(/\r?\n/)[0].slice(0, 120))} (${req.headers['user-agent'] || 'no user agent'})`);
+    }
     const rest = buf.subarray(idx + sep);
     try {
       route(sock, req, rest, ctx);
