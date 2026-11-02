@@ -27,6 +27,7 @@
   <main class="layout">
     <section class="map-wrap">
       <div id="map"></div>
+      <div class="trail-banner hidden" id="trailBanner"></div>
       <div class="map-tools">
         <label><input type="checkbox" id="trailsToggle" checked> Trails</label>
         <label><input type="checkbox" id="labelsToggle" checked> Labels</label>
@@ -164,6 +165,7 @@
         </select>
       </label>
       <label class="inline"><input type="checkbox" id="historyRejected" checked> Refused logins</label>
+      <button class="small-btn" id="historyTrailsAll" title="Show the trails of the sessions listed on the map">Show trails on map</button>
       <button class="small-btn" id="historyCsv">Export CSV</button>
     </div>
     <div class="history-stats" id="historyStats"></div>

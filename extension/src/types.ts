@@ -105,6 +105,8 @@ export interface SessionRecord {
   fixSec: { fixed: number; float: number; other: number; none: number };
   firstPos: [number, number] | null;
   lastPos: [number, number] | null;
+  /** Points kept in this session's trail (sessions from before trails were kept have none) */
+  trailPoints?: number;
 }
 
 /** A refused login attempt by a known rover */

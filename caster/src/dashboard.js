@@ -247,6 +247,14 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         return send(res, 200, result);
       }
 
+      // GET /api/devices/:serial/track?start=<session start ms> -> that session's trail
+      if (req.method === 'GET' && parts[1] === 'devices' && parts[3] === 'track') {
+        const serial = normaliseSerial(decodeURIComponent(parts[2]));
+        const start = Number(url.searchParams.get('start'));
+        if (!Number.isSafeInteger(start)) throw new UserError('Which session? Give its start time');
+        return send(res, 200, { serial, start, points: state.trailFor(P, serial, start) });
+      }
+
       // GET /api/devices/:serial/history?days=30  (days=0 for everything kept)
       if (req.method === 'GET' && parts[1] === 'devices' && parts[3] === 'history') {
         const serial = normaliseSerial(decodeURIComponent(parts[2]));

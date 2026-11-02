@@ -280,6 +280,11 @@ map.on('load', () => {
   map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'trails-casing', type: 'line', source: 'trails', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 5, 'line-opacity': 0.8 } });
   map.addLayer({ id: 'trails', type: 'line', source: 'trails', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['get', 'colour'], 'line-width': 3, 'line-opacity': 0.85 } });
+  // Trails from a login's history, coloured by fix quality
+  map.addSource('history-trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'history-trails-casing', type: 'line', source: 'history-trails', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1b1f24', 'line-width': 6, 'line-opacity': 0.55 } });
+  map.addLayer({ id: 'history-trails', type: 'line', source: 'history-trails', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['get', 'colour'], 'line-width': 3.5 } });
+  map.addLayer({ id: 'history-ends', type: 'circle', source: 'history-trails', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': ['get', 'colour'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
   mapReady = true;
   basemap.onLoad();
   renderMap();
@@ -1582,21 +1587,23 @@ function renderHistory() {
   const rows: string[] = [];
   for (const r of data.live) {
     rows.push(`<tr class="live"><td class="num">${when(r.connectedAt)}<div class="sub">online now</div></td><td class="num">${hms((serverNow() - r.connectedAt) / 1000)}</td><td>${esc(r.mount)}<div class="sub hide-sm">${esc(r.protocol)}</div></td>
-      <td>${r.gga ? esc(r.gga.fix) : '<span class="sub">no position sent</span>'}</td><td class="num">${bytes(r.bytesOut)}</td><td class="hide-sm">${esc(r.addr)}</td><td>Connected</td></tr>`);
+      <td>${r.gga ? esc(r.gga.fix) : '<span class="sub">no position sent</span>'}</td><td class="num">${bytes(r.bytesOut)}</td><td class="hide-sm">${esc(r.addr)}</td><td>Connected</td>
+      <td>${r.gga ? `<button class="link-btn" data-trail-start="${r.connectedAt}">Show</button>` : ''}</td></tr>`);
   }
   for (const r of data.records as HistoryRecord[]) {
     if (r.type === 'rejected') {
       if (!showRejected) continue;
-      rows.push(`<tr class="rejected"><td class="num">${when(r.time)}</td><td></td><td>${esc(r.mount)}</td><td colspan="2">Login refused</td><td class="hide-sm">${esc(r.addr)}</td><td>${esc(r.reason)}</td></tr>`);
+      rows.push(`<tr class="rejected"><td class="num">${when(r.time)}</td><td></td><td>${esc(r.mount)}</td><td colspan="2">Login refused</td><td class="hide-sm">${esc(r.addr)}</td><td>${esc(r.reason)}</td><td></td></tr>`);
     } else {
       rows.push(`<tr><td class="num">${when(r.start)}<div class="sub">to ${sameDay(r.start, r.end) ? clock(r.end) : when(r.end)}</div></td><td class="num">${hms(r.durationSec)}</td>
         <td>${esc(r.mount)}<div class="sub hide-sm">${esc(r.protocol)}</div></td><td>${fixBar(r.fixSec)}</td><td class="num">${bytes(r.bytes)}</td>
-        <td class="hide-sm">${esc(r.addr)}${r.agent ? `<div class="sub">${esc(r.agent)}</div>` : ''}</td><td>${esc(r.endReason)}</td></tr>`);
+        <td class="hide-sm">${esc(r.addr)}${r.agent ? `<div class="sub">${esc(r.agent)}</div>` : ''}</td><td>${esc(r.endReason)}</td>
+        <td>${r.trailPoints ? `<button class="link-btn" data-trail-start="${r.start}" title="${r.trailPoints} points">Show</button>` : `<span class="sub">${r.sentPosition ? 'not kept' : '—'}</span>`}</td></tr>`);
     }
   }
   const range = data.days ? `the last ${data.days === 1 ? '24 hours' : `${data.days} days`}` : 'the history kept';
-  $('#historyTable').innerHTML = `<thead><tr><th>Connected</th><th>Duration</th><th>Mountpoint</th><th>Fix</th><th>Data</th><th class="hide-sm">From</th><th>Ended</th></tr></thead>
-    <tbody>${rows.join('') || `<tr><td colspan="7" class="empty">No connections in ${range}.</td></tr>`}</tbody>`;
+  $('#historyTable').innerHTML = `<thead><tr><th>Connected</th><th>Duration</th><th>Mountpoint</th><th>Fix</th><th>Data</th><th class="hide-sm">From</th><th>Ended</th><th>Trail</th></tr></thead>
+    <tbody>${rows.join('') || `<tr><td colspan="8" class="empty">No connections in ${range}.</td></tr>`}</tbody>`;
 }
 
 async function loadHistory() {
@@ -1654,6 +1661,140 @@ $('#historyClose').addEventListener('click', () => historyDlg.close());
 $('#historyRange').addEventListener('change', () => void loadHistory());
 $('#historyRejected').addEventListener('change', renderHistory);
 $('#historyCsv').addEventListener('click', historyCsv);
+
+// ------------------------------------------------------------------ trails from a login's history
+interface TrailPoint { lng: number; lat: number; t: number; q: number; who: string }
+/** Points of the trails on the map (history and live) that hovering can show the time of. */
+let historyTrail: { serial: string; who: string; sessions: number; from: number; to: number; points: TrailPoint[] } | null = null;
+
+async function showTrails(starts: number[]) {
+  const data = historyData;
+  if (!data || !starts.length) return;
+  const serial = data.device.serial;
+  const who = data.device.label || serial;
+  const btn = $<HTMLButtonElement>('#historyTrailsAll');
+  btn.disabled = true;
+  btn.textContent = 'Loading trails…';
+  try {
+    const replies = await Promise.all(
+      starts.map((s) => api('GET', `/api/devices/${encodeURIComponent(serial)}/track?start=${s}`) as unknown as Promise<{ points: [number, number, number, number][] }>),
+    );
+    const sessions = replies.map((r) => r.points.map(([lat, lon, t, q]) => ({ lat, lng: lon, t, q, who })));
+    const points = sessions.flat();
+    if (!points.length) {
+      alert('No trail was kept for these sessions (the machine sent no positions).');
+      return;
+    }
+    historyTrail = { serial, who, sessions: sessions.filter((s) => s.length).length, from: Math.min(...points.map((p) => p.t)), to: Math.max(...points.map((p) => p.t)), points };
+    drawHistoryTrail(sessions);
+    historyDlg.close();
+    const b = new maplibregl.LngLatBounds();
+    for (const p of points) b.extend([p.lng, p.lat]);
+    app.fitted = true;
+    map.fitBounds(b, { padding: { top: 110, bottom: 70, left: 60, right: 60 }, maxZoom: 19, duration: 600 });
+  } catch (err) {
+    alert(`Couldn't load the trail: ${(err as Error).message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Show trails on map';
+  }
+}
+
+function drawHistoryTrail(sessions: TrailPoint[][]) {
+  const features: GeoJSON.Feature[] = [];
+  for (const pts of sessions) {
+    if (!pts.length) continue;
+    // One line per run of the same fix quality, so the colour shows where the fix changed
+    let run: TrailPoint[] = [pts[0]];
+    const flush = () => {
+      if (run.length > 1) features.push({ type: 'Feature', properties: { colour: css(FIX_COLOURS[run[0].q] || '--q1') }, geometry: { type: 'LineString', coordinates: run.map((p) => [p.lng, p.lat]) } });
+    };
+    for (let i = 1; i < pts.length; i++) {
+      run.push(pts[i]);
+      if (pts[i].q !== pts[i - 1].q) {
+        flush();
+        run = [pts[i]];
+      }
+    }
+    flush();
+    const first = pts[0], last = pts[pts.length - 1];
+    features.push({ type: 'Feature', properties: { colour: '#2e7d32' }, geometry: { type: 'Point', coordinates: [first.lng, first.lat] } });
+    features.push({ type: 'Feature', properties: { colour: '#c62828' }, geometry: { type: 'Point', coordinates: [last.lng, last.lat] } });
+  }
+  (map.getSource('history-trails') as maplibregl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
+  const banner = $('#trailBanner');
+  banner.classList.toggle('hidden', !historyTrail);
+  if (historyTrail) {
+    const h = historyTrail;
+    banner.innerHTML = `<div><b>${esc(h.who)}</b> · ${h.sessions} session${h.sessions === 1 ? '' : 's'}<div class="sub">${esc(when(h.from))} – ${esc(sameDay(h.from, h.to) ? clock(h.to) : when(h.to))} · <span class="dot-start"></span>start <span class="dot-end"></span>end · hover the trail for times</div></div>
+      <button class="link-btn" id="trailBack">Back to history</button><button class="link-btn" id="trailClear">Clear</button>`;
+  }
+}
+
+function clearHistoryTrail() {
+  historyTrail = null;
+  drawHistoryTrail([]);
+  trailTip.remove();
+}
+
+$('#trailBanner').addEventListener('click', (e) => {
+  const id = (e.target as HTMLElement).id;
+  if (id === 'trailClear') clearHistoryTrail();
+  else if (id === 'trailBack' && historyTrail) openHistory(historyTrail.serial);
+});
+
+$('#historyTable').addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>('[data-trail-start]');
+  if (b) void showTrails([Number(b.dataset.trailStart)]);
+});
+$('#historyTrailsAll').addEventListener('click', () => {
+  const data = historyData;
+  if (!data) return;
+  const starts = [
+    ...data.live.filter((r) => r.gga).map((r) => r.connectedAt),
+    ...data.records.filter((r): r is SessionRecord => r.type === 'session' && !!r.trailPoints).map((r) => r.start),
+  ].slice(0, 100);
+  if (!starts.length) {
+    alert('None of the sessions listed have a trail. Trails are kept from now on for machines that send their position.');
+    return;
+  }
+  void showTrails(starts);
+});
+
+// Hovering a trail (history or live) shows when the machine was there
+const trailTip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'trail-tip', offset: 10, maxWidth: '260px' });
+let hoverFrame = 0;
+map.on('mousemove', (e) => {
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = 0;
+    const candidates: TrailPoint[] = historyTrail ? [...historyTrail.points] : [];
+    if ($<HTMLInputElement>('#trailsToggle').checked) {
+      for (const r of app.rovers.values()) for (const p of r.track || []) candidates.push({ lat: p[0], lng: p[1], t: p[2], q: p[3], who: roverName(r) });
+    }
+    let best: TrailPoint | null = null;
+    let bestD = 12 * 12; // within 12 pixels
+    const b = map.getBounds();
+    for (const p of candidates) {
+      if (p.lng < b.getWest() || p.lng > b.getEast() || p.lat < b.getSouth() || p.lat > b.getNorth()) continue;
+      const s = map.project([p.lng, p.lat]);
+      const d = (s.x - e.point.x) ** 2 + (s.y - e.point.y) ** 2;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) {
+      trailTip.remove();
+      map.getCanvas().style.cursor = '';
+      return;
+    }
+    map.getCanvas().style.cursor = 'crosshair';
+    const t = new Date(best.t);
+    trailTip
+      .setLngLat([best.lng, best.lat])
+      .setHTML(`<b>${esc(t.toLocaleTimeString([], { hour12: false }))}</b> ${esc(t.toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' }))}<div>${esc(best.who)} · <span style="color:${css(FIX_COLOURS[best.q] || '--q1')}">●</span> ${esc(FIX_NAMES[best.q] || `Fix ${best.q}`)}</div>`)
+      .addTo(map);
+  });
+});
+map.getCanvas().addEventListener('mouseleave', () => trailTip.remove());
 historyDlg.addEventListener('click', (e) => {
   if (e.target === historyDlg) historyDlg.close(); // click on the backdrop
 });

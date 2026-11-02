@@ -337,3 +337,11 @@ body.view-only [data-history], body.view-only [data-kick], body.view-only [data-
 body.view-only [data-receiver-add], body.view-only [data-receiver-edit], body.view-only [data-remove-mount],
 body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !important; }
 .log-more { justify-content: center; border-bottom: 0; }
+
+/* Trail from a login's history */
+.trail-banner { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 500; background: var(--surface); border-radius: var(--radius); box-shadow: 0 1px 4px rgba(0,0,0,.25); padding: 6px 10px; display: flex; gap: 10px; align-items: center; font-size: 13px; max-width: calc(100% - 24px); }
+.trail-banner .sub { color: var(--muted); font-size: 12px; }
+.dot-start, .dot-end { display: inline-block; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3); margin: 0 3px 0 6px; vertical-align: -1px; }
+.dot-start { background: #2e7d32; } .dot-end { background: #c62828; }
+.trail-tip .maplibregl-popup-content { padding: 6px 9px; font-size: 12px; line-height: 1.4; pointer-events: none; }
+.trail-tip { pointer-events: none; }

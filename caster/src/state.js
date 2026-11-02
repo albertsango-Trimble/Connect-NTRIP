@@ -2,6 +2,17 @@
 import { EventEmitter } from 'node:events';
 
 const TRACK_POINTS = 300;
+// A session's trail on disk: a point when the machine has moved this far, the fix changes, or this long has passed
+const TRAIL_MIN_MOVE_M = 0.5;
+const TRAIL_MAX_GAP_MS = 10_000;
+const TRAIL_FLUSH_MS = 15_000;
+
+function metres(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180;
+  const x = (lon2 - lon1) * r * Math.cos(((lat1 + lat2) / 2) * r);
+  const y = (lat2 - lat1) * r;
+  return Math.hypot(x, y) * 6_371_000;
+}
 const LOG_SIZE = 300;
 
 export class CasterState extends EventEmitter {
@@ -71,6 +82,7 @@ export class CasterState extends EventEmitter {
     Object.assign(client, {
       connectedAt: Date.now(), bytesOut: 0, lastBytes: 0, rateBps: 0,
       gga: null, ggaAt: null, track: [], fixMs: {}, firstPos: null,
+      trail: { buf: [], last: null, points: 0, flushedAt: Date.now() },
     });
     this.clients.set(client.id, client);
     this.event('rover.connected', {
@@ -83,6 +95,7 @@ export class CasterState extends EventEmitter {
     if (!this.clients.delete(client.id)) return;
     reason = client.endReason || reason;
     this.event('rover.disconnected', { project: client.project, id: client.id, serial: client.serial, mount: client.mount, reason });
+    this.flushTrail(client);
     this.projects?.historyFor(client.project).append(client.serial, this.sessionRecord(client, reason));
   }
 
@@ -120,6 +133,7 @@ export class CasterState extends EventEmitter {
       fixSec: { fixed: sec(f[4]), float: sec(f[5]), other: sec(other), none: sec((f[0] || 0) + (f.gap || 0)) },
       firstPos: client.firstPos,
       lastPos: last ? [Number(last.lat.toFixed(7)), Number(last.lon.toFixed(7))] : null,
+      trailPoints: client.trail?.points || 0,
     };
   }
 
@@ -140,8 +154,39 @@ export class CasterState extends EventEmitter {
         client.track.push([gga.lat, gga.lon, client.ggaAt, gga.quality]);
         if (client.track.length > TRACK_POINTS) client.track.shift();
       }
+      this.recordTrail(client, gga, now);
     }
     this.emit('position', client);
+  }
+
+  /** Adds a point to the session's trail on disk when the machine has moved, the fix changed, or time has passed. */
+  recordTrail(client, gga, now) {
+    const t = client.trail;
+    if (!t) return;
+    const l = t.last;
+    if (l && l[3] === gga.quality && now - l[2] < TRAIL_MAX_GAP_MS && metres(l[0], l[1], gga.lat, gga.lon) < TRAIL_MIN_MOVE_M) return;
+    const p = [Number(gga.lat.toFixed(8)), Number(gga.lon.toFixed(8)), now, gga.quality];
+    t.last = p;
+    t.buf.push(p);
+    t.points++;
+  }
+
+  flushTrail(client) {
+    const t = client.trail;
+    if (!t?.buf.length) return;
+    this.projects?.historyFor(client.project).appendTrack(client.serial, client.connectedAt, t.buf);
+    t.buf = [];
+    t.flushedAt = Date.now();
+  }
+
+  /** A session's trail, including points not yet written for a machine that is still connected. */
+  trailFor(project, serial, start) {
+    const history = this.projects.historyFor(project);
+    const points = history.readTrack(serial, start);
+    for (const c of this.clients.values()) {
+      if (c.project === project && c.serial === serial && c.connectedAt === Number(start)) points.push(...c.trail.buf);
+    }
+    return points;
   }
 
   // ---- base receivers ----
@@ -180,9 +225,11 @@ export class CasterState extends EventEmitter {
       s.rateBps = s.bytesIn - s.lastBytes;
       s.lastBytes = s.bytesIn;
     }
+    const now = Date.now();
     for (const c of this.clients.values()) {
       c.rateBps = c.bytesOut - c.lastBytes;
       c.lastBytes = c.bytesOut;
+      if (c.trail?.buf.length && now - c.trail.flushedAt >= TRAIL_FLUSH_MS) this.flushTrail(c);
     }
     this.emit('tick');
   }
