@@ -74,6 +74,19 @@ export interface Device {
   profile: Profile;
   created: string;
   updated: string;
+  /** The caster has this login's password on record, so it can be included when emailing the login */
+  passwordOnRecord?: boolean;
+}
+
+/** A login's details written up as an email to its operator. */
+export interface LoginEmail {
+  serial?: string;
+  label?: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  text: string;
+  passwordOnRecord?: boolean;
 }
 
 export interface LogEvent {
@@ -167,6 +180,8 @@ export interface ProjectInfo {
   name: string;
   /** True when the user is an admin of the Connect project */
   isAdmin: boolean;
+  /** The caster can send email itself (an SMTP server is set up) */
+  emailEnabled?: boolean;
   /** Only sent to project admins */
   baseConnection: { host: string | null; port: number; password: string } | null;
 }

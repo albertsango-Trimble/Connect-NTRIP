@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { UserError, normaliseSerial } from './devices.js';
 import { isReceiverHost, startLink } from './webui.js';
+import { compose, emailEnabled, sendEmail } from './credentials.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
 const EXPORT_FORMAT = 'connect-ntrip-logins';
@@ -121,6 +122,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       id: p.id,
       name: p.name,
       isAdmin: !!admin,
+      emailEnabled: !!admin && emailEnabled(config),
       baseConnection: admin ? { host: config.publicHost || null, port: config.ntripPort, password: p.sourcePassword } : null,
     };
   }
@@ -244,6 +246,49 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         }
         state.event('devices.imported', { project: P, by: user.email, added: result.added, replaced: result.replaced, skipped: result.skipped });
         pushDevices();
+        return send(res, 200, result);
+      }
+
+      // Login details for emailing to the operator. GET /api/devices/:serial/credentials -> the email for one login;
+      // POST /api/devices/email {serials} -> sends them through the caster's SMTP server (if one is set up)
+      const credentialsFor = d => compose({
+        casterName: config.casterName,
+        projectName: project.name,
+        host: config.publicHost,
+        port: config.ntripPort,
+        device: d,
+        password: devices.password(d.serial),
+        mounts: state.mountpointViews(P).map(m => ({ name: m.name, format: /detecting/i.test(m.detectedFormat || m.format || '') ? '' : m.detectedFormat || m.format })),
+      });
+      if (req.method === 'GET' && url.pathname === '/api/devices/credentials') {
+        const list = devices.list().filter(d => d.enabled);
+        state.event('device.credentials_opened', { project: P, serial: `all (${list.length})`, by: user.email });
+        return send(res, 200, list.map(d => ({ serial: d.serial, label: d.label, ...credentialsFor(d), passwordOnRecord: d.passwordOnRecord })));
+      }
+      if (req.method === 'GET' && parts[1] === 'devices' && parts[3] === 'credentials') {
+        const d = devices.get(decodeURIComponent(parts[2]));
+        if (!d) return send(res, 404, { error: 'Login not found' });
+        state.event('device.credentials_opened', { project: P, serial: d.serial, by: user.email });
+        return send(res, 200, { ...credentialsFor(d), passwordOnRecord: d.passwordOnRecord });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/devices/email') {
+        if (!emailEnabled(config)) throw new UserError('Email sending is not set up on the caster');
+        const body = await readJson(req);
+        const wanted = Array.isArray(body.serials) ? new Set(body.serials.map(normaliseSerial)) : null;
+        const list = devices.list().filter(d => d.enabled && (!wanted || wanted.has(d.serial)));
+        const result = { sent: [], skipped: [], failed: [] };
+        for (const d of list) {
+          const msg = credentialsFor(d);
+          if (!msg.to.length) { result.skipped.push({ serial: d.serial, reason: 'no email address' }); continue; }
+          try {
+            await sendEmail(config, msg);
+            result.sent.push({ serial: d.serial, to: msg.to });
+            state.event('device.credentials_emailed', { project: P, serial: d.serial, to: msg.to.join(', '), by: user.email });
+          } catch (err) {
+            console.error(`Email to ${msg.to.join(', ')} failed: ${err.message}`);
+            result.failed.push({ serial: d.serial, reason: err.message.slice(0, 200) });
+          }
+        }
         return send(res, 200, result);
       }
 

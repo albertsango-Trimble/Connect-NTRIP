@@ -95,6 +95,7 @@
           <span class="hint">Logins belong to this project. Copy them to another project:</span>
           <button type="button" class="ghost-btn" id="exportLogins" title="Download this project's logins to import into another project">Export</button>
           <button type="button" class="ghost-btn" id="importLogins" title="Add logins exported from another project">Import</button>
+          <button type="button" class="ghost-btn" id="emailAllLogins" title="Email every login its connection details">Email all</button>
           <input type="file" id="importFile" accept=".json,application/json" hidden>
         </div>
         <div id="importPreview" class="card form hidden"></div>
@@ -165,6 +166,16 @@
       <div class="tab-body hidden" id="tab-log"><ol class="log" id="logList"></ol></div>
     </aside>
   </main>
+
+  <dialog id="emailDlg" class="email-dlg">
+    <div class="history-head">
+      <div style="min-width:0"><h3 id="emailTitle">Email login details</h3><div class="card-sub" id="emailSub"></div></div>
+      <button class="icon-btn" id="emailClose" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="emailBody"></div>
+  </dialog>
 
   <dialog id="historyDlg" class="history-dlg">
     <div class="history-head">

@@ -10,6 +10,7 @@ import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoCha
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
 import { loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
+import type { LoginEmail } from './types';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord, ProjectInfo, LoginExport } from './types';
 
 const STALE_MS = 15_000;
@@ -764,6 +765,7 @@ function renderDevices() {
         <button class="link-btn" data-history="${esc(d.serial)}">History</button>
         <button class="link-btn" data-edit="${esc(d.serial)}">Edit</button>
         <button class="link-btn" data-toggle="${esc(d.serial)}">${d.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="link-btn" data-email="${esc(d.serial)}">Email</button>
         <button class="link-btn danger" data-delete="${esc(d.serial)}">Delete</button>
       </div>
     </div>`,
@@ -1085,6 +1087,10 @@ $('#deviceCancel').addEventListener('click', () => {
 $('#deviceList').addEventListener('click', async (e) => {
   const t = e.target as HTMLElement;
   if (t.dataset.history) return;
+  if (t.dataset.email) {
+    void openLoginEmail(t.dataset.email);
+    return;
+  }
   const serial = t.dataset.edit || t.dataset.toggle || t.dataset.delete;
   if (!serial) return;
   const d = app.devices.find((x) => x.serial === serial);
@@ -1118,6 +1124,121 @@ $('#deviceList').addEventListener('click', async (e) => {
       await api('DELETE', `/api/devices/${encodeURIComponent(serial)}`);
     } catch (err) {
       alert((err as Error).message);
+    }
+  }
+});
+
+// ------------------------------------------------------------------ email a login's details to its operator
+const emailDlg = $<HTMLDialogElement>('#emailDlg');
+$('#emailClose').addEventListener('click', () => emailDlg.close());
+let emailList: LoginEmail[] = [];
+
+const mailto = (m: LoginEmail) =>
+  `mailto:${m.to.map(encodeURIComponent).join(',')}?${[m.cc.length ? `cc=${m.cc.map(encodeURIComponent).join(',')}` : '', `subject=${encodeURIComponent(m.subject)}`, `body=${encodeURIComponent(m.text.replace(/\n/g, '\r\n'))}`].filter(Boolean).join('&')}`;
+const noPwNote = '<p class="warn">The caster doesn\'t have this login\'s password on record (it was set before passwords were kept for emailing), so the email asks them to use their existing password. To include it, <b>Edit</b> the login and set the password again.</p>';
+
+async function openLoginEmail(serial: string) {
+  $('#emailTitle').textContent = 'Email login details';
+  $('#emailSub').textContent = serial;
+  $('#emailBody').innerHTML = '<p class="empty">Loading…</p>';
+  if (!emailDlg.open) emailDlg.showModal();
+  try {
+    const m = (await api('GET', `/api/devices/${encodeURIComponent(serial)}/credentials`)) as unknown as LoginEmail;
+    emailList = [{ ...m, serial }];
+    const canSend = !!app.project?.emailEnabled && m.to.length > 0;
+    $('#emailBody').innerHTML = `
+      ${m.to.length ? '' : '<p class="warn">This login has no operator or company email address. Add one with <b>Edit</b>, or copy the text below and send it yourself.</p>'}
+      ${m.passwordOnRecord ? '' : noPwNote}
+      <div class="email-meta"><span>To</span><b>${esc(m.to.join(', ') || '—')}</b>${m.cc.length ? `<span>Cc</span><b>${esc(m.cc.join(', '))}</b>` : ''}<span>Subject</span><b>${esc(m.subject)}</b></div>
+      <textarea class="email-text" readonly rows="16">${esc(m.text)}</textarea>
+      <div class="form-actions">
+        ${canSend ? '<button class="primary-btn" id="emailSendOne">Send now</button>' : ''}
+        ${m.to.length ? `<a class="${canSend ? 'ghost-btn' : 'primary-btn'} btn-link" href="${esc(mailto(m))}" target="_blank" rel="noopener">Open in email app</a>` : ''}
+        <button class="ghost-btn" id="emailCopy">Copy text</button>
+      </div>
+      <p class="form-msg" id="emailMsg"></p>`;
+  } catch (err) {
+    $('#emailBody').innerHTML = `<p class="warn">${esc((err as Error).message)}</p>`;
+  }
+}
+
+$('#emailAllLogins').addEventListener('click', async () => {
+  $('#emailTitle').textContent = 'Email all logins';
+  $('#emailSub').textContent = app.project?.name || '';
+  $('#emailBody').innerHTML = '<p class="empty">Loading…</p>';
+  if (!emailDlg.open) emailDlg.showModal();
+  try {
+    emailList = (await api('GET', '/api/devices/credentials')) as unknown as LoginEmail[];
+    renderEmailAll();
+  } catch (err) {
+    $('#emailBody').innerHTML = `<p class="warn">${esc((err as Error).message)}</p>`;
+  }
+});
+
+function renderEmailAll(sent: Map<string, string> = new Map()) {
+  const withEmail = emailList.filter((m) => m.to.length);
+  const noEmail = emailList.length - withEmail.length;
+  const noPw = emailList.filter((m) => !m.passwordOnRecord).length;
+  const canSend = !!app.project?.emailEnabled;
+  $('#emailBody').innerHTML = `
+    <p class="card-sub">Each enabled login gets its own email with the project, server address, port, mountpoints and formats, username and password. It goes to the operator, copied to the company contact.</p>
+    ${noEmail ? `<p class="warn">${noEmail} login${noEmail === 1 ? ' has' : 's have'} no email address and will be left out.</p>` : ''}
+    ${noPw ? `<p class="warn">${noPw} login${noPw === 1 ? '' : 's'} were set up before passwords were kept for emailing; their email asks them to use their existing password. Set the password again with <b>Edit</b> to include it.</p>` : ''}
+    ${canSend
+      ? `<div class="form-actions"><button class="primary-btn" id="emailSendAll"${withEmail.length ? '' : ' disabled'}>Send ${withEmail.length} email${withEmail.length === 1 ? '' : 's'} now</button></div>`
+      : '<p class="card-sub">The caster isn\'t set up to send email, so open each one in your email app below (or ask for SMTP to be set up on the server to send them all in one go).</p>'}
+    <p class="form-msg" id="emailMsg"></p>
+    <table class="history-table email-table"><thead><tr><th>Login</th><th>Send to</th><th>Password</th><th></th></tr></thead><tbody>
+    ${emailList
+      .map((m) => {
+        const status = sent.get(m.serial || '');
+        return `<tr><td>${esc(m.label || m.serial)}<div class="sub">${esc(m.serial)}</div></td>
+          <td>${m.to.length ? esc(m.to.join(', ')) + (m.cc.length ? `<div class="sub">cc ${esc(m.cc.join(', '))}</div>` : '') : '<span class="sub">no email address</span>'}</td>
+          <td>${m.passwordOnRecord ? 'Included' : '<span class="sub">not on record</span>'}</td>
+          <td>${status ? `<span class="sub">${esc(status)}</span>` : m.to.length ? `<a class="link-btn" data-opened="${esc(m.serial)}" href="${esc(mailto(m))}" target="_blank" rel="noopener">Open email</a>` : ''}</td></tr>`;
+      })
+      .join('')}
+    </tbody></table>`;
+}
+
+$('#emailBody').addEventListener('click', async (e) => {
+  const t = e.target as HTMLElement;
+  const msg = () => document.querySelector<HTMLElement>('#emailMsg');
+  if (t.dataset.opened) {
+    // The email app opens from the link itself; mark the row so it's easy to work down the list
+    setTimeout(() => { t.replaceWith(Object.assign(document.createElement('span'), { className: 'sub', textContent: 'Opened ✓' })); }, 0);
+  } else if (t.id === 'emailCopy' && emailList[0]) {
+    const m = emailList[0];
+    try {
+      await navigator.clipboard.writeText(`To: ${m.to.join(', ')}${m.cc.length ? `\nCc: ${m.cc.join(', ')}` : ''}\nSubject: ${m.subject}\n\n${m.text}`);
+      t.textContent = 'Copied';
+    } catch {
+      (document.querySelector('.email-text') as HTMLTextAreaElement | null)?.select();
+      t.textContent = 'Press Ctrl+C to copy';
+    }
+  } else if (t.id === 'emailSendOne' || t.id === 'emailSendAll') {
+    const serials = t.id === 'emailSendOne' ? [emailList[0].serial] : emailList.filter((m) => m.to.length).map((m) => m.serial);
+    if (t.id === 'emailSendAll' && !confirm(`Send ${serials.length} email${serials.length === 1 ? '' : 's'} with login details now?`)) return;
+    (t as HTMLButtonElement).disabled = true;
+    t.textContent = 'Sending…';
+    try {
+      const r = (await api('POST', '/api/devices/email', { serials })) as unknown as { sent: { serial: string }[]; skipped: { serial: string; reason: string }[]; failed: { serial: string; reason: string }[] };
+      const status = new Map<string, string>();
+      for (const x of r.sent) status.set(x.serial, 'Sent ✓');
+      for (const x of r.failed) status.set(x.serial, `Failed: ${x.reason}`);
+      for (const x of r.skipped) status.set(x.serial, `Skipped: ${x.reason}`);
+      if (t.id === 'emailSendAll') renderEmailAll(status);
+      else t.textContent = r.sent.length ? 'Sent ✓' : 'Not sent';
+      const m = msg();
+      if (m) {
+        m.textContent = `${r.sent.length} sent${r.failed.length ? `, ${r.failed.length} failed` : ''}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}.${r.failed[0] ? ` ${r.failed[0].reason}` : ''}`;
+        m.className = `form-msg ${r.failed.length ? 'err' : 'ok'}`;
+      }
+    } catch (err) {
+      (t as HTMLButtonElement).disabled = false;
+      t.textContent = 'Try again';
+      const m = msg();
+      if (m) { m.textContent = (err as Error).message; m.className = 'form-msg err'; }
     }
   }
 });

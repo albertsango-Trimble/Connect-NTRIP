@@ -1,8 +1,10 @@
 // Rover accounts: username = receiver serial number, password chosen by the user.
-// Passwords are stored as scrypt hashes, never in plain text.
+// Passwords are checked against scrypt hashes; a copy is kept encrypted with this server's key so the login's
+// details can be emailed to its operator (see secrets.js).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { seal, unseal } from './secrets.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 const KEYLEN = 32;
@@ -87,6 +89,7 @@ export class DeviceStore {
     if (!validatePassword(password)) throw new UserError('Password must be 6-64 printable characters');
     this.devices[serial] = {
       hash: hashPassword(password),
+      sealed: seal(password),
       label: String(label).slice(0, 80),
       mountpoints: Array.isArray(mountpoints) ? mountpoints.map(String) : [],
       enabled: !!enabled,
@@ -105,6 +108,7 @@ export class DeviceStore {
     if (password !== undefined) {
       if (!validatePassword(password)) throw new UserError('Password must be 6-64 printable characters');
       d.hash = hashPassword(password);
+      d.sealed = seal(password);
     }
     if (label !== undefined) d.label = String(label).slice(0, 80);
     if (mountpoints !== undefined) d.mountpoints = Array.isArray(mountpoints) ? mountpoints.map(String) : [];
@@ -119,7 +123,15 @@ export class DeviceStore {
   exportAll() {
     return Object.entries(this.devices).map(([serial, d]) => ({
       serial, label: d.label, enabled: d.enabled, profile: { ...emptyProfile(), ...(d.profile || {}) }, passwordHash: d.hash,
+      // Encrypted with this server's key, so only this caster can read it back (for emailing the login)
+      ...(d.sealed ? { sealedPassword: d.sealed } : {}),
     }));
+  }
+
+  /** The login's password if this server has it on record (set since passwords were kept for emailing). */
+  password(serial) {
+    const d = this.devices[normaliseSerial(serial)];
+    return d?.sealed ? unseal(d.sealed) : null;
   }
 
   /**
@@ -133,8 +145,12 @@ export class DeviceStore {
     const exists = !!this.devices[serial];
     if (exists && !replace) return 'skipped';
     const now = new Date().toISOString();
+    // Keep the password for emailing only if it was sealed by this server and still matches the hash
+    const sealedPw = unseal(rec.sealedPassword);
+    const sealed = sealedPw !== null && checkPassword(sealedPw, rec.passwordHash) ? rec.sealedPassword : null;
     this.devices[serial] = {
       hash: rec.passwordHash,
+      sealed,
       label: String(rec.label || '').slice(0, 80),
       mountpoints: [],
       enabled: rec.enabled !== false,
@@ -167,7 +183,7 @@ export class DeviceStore {
 }
 
 function publicView(serial, d) {
-  return { serial, label: d.label, mountpoints: d.mountpoints, enabled: d.enabled, profile: { ...emptyProfile(), ...(d.profile || {}) }, created: d.created, updated: d.updated };
+  return { serial, label: d.label, mountpoints: d.mountpoints, enabled: d.enabled, profile: { ...emptyProfile(), ...(d.profile || {}) }, created: d.created, updated: d.updated, passwordOnRecord: !!d.sealed };
 }
 
 function emptyProfile() {

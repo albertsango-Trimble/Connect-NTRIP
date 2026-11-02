@@ -139,6 +139,20 @@ cd /opt/connect-ntrip/caster && sudo -u ntrip CASTER_CONFIG=/etc/connect-ntrip/c
 sudo systemctl start connect-ntrip
 ```
 
+## 3a. Email login details to operators
+
+In **Logins**, each login has an **Email** button, and **Email all** sends every enabled login its own email: project, server address, port, mountpoints with their formats, username (serial) and password. It goes to the operator's email, copied to the company email.
+
+- Passwords set or changed from this version on are kept encrypted with a key that stays on the server (`/var/lib/connect-ntrip/login-key`), so they can go in the email. Older logins' emails ask them to use their existing password until you set it again with **Edit**. Exported logins carry the encrypted password, so importing into another project on the same caster keeps it.
+- Without email set up on the server, **Open in email app** opens a ready-written draft in your own email program (one per login in **Email all**).
+- To have the caster send them itself (**Send now** / **Send all**), add an SMTP account to `/etc/connect-ntrip/config.json` and restart:
+
+```json
+"email": { "host": "smtp.office365.com", "port": 587, "user": "caster@yourcompany.com", "from": "UPG Caster <caster@yourcompany.com>", "replyTo": "survey@yourcompany.com" }
+```
+
+Put the SMTP password in the service's environment rather than the file: `sudo systemctl edit connect-ntrip`, add `[Service]` and `Environment=EMAIL_PASS=...`, then restart. Use port 587 (Lightsail blocks 25). Microsoft 365 needs SMTP AUTH enabled for that mailbox.
+
 ## 4. Install the extension in Trimble Connect
 
 1. Push this repo to GitHub as `albertsango-Trimble/Connect-NTRIP`. In the repo's **Settings → Pages**, set Source to **GitHub Actions**; the included workflow builds `extension/` and publishes it.

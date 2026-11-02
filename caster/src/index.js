@@ -6,8 +6,10 @@ import { Tokens, loadSecret, startWebUiProxy } from './webui.js';
 import { ManualPositions } from './positions.js';
 import { ReceiverStore } from './receivers.js';
 import { Projects } from './projects.js';
+import { initSecrets } from './secrets.js';
 
 const config = loadConfig();
+initSecrets(config.dataDir);
 const state = new CasterState(config);
 state.positions = new ManualPositions(config.dataDir);
 // Projects first: the receiver store and the NTRIP server look up which project things belong to

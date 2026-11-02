@@ -4,13 +4,16 @@
   "description": "NTRIP v1/v2 caster with live rover tracking for the Connect-NTRIP Trimble Connect extension",
   "type": "module",
   "main": "src/index.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/index.js",
     "simulate": "node tools/simulate.js",
     "add-device": "node tools/add-device.js"
   },
   "dependencies": {
+    "nodemailer": "^6.9.16",
     "ws": "^8.18.0"
   }
 }
