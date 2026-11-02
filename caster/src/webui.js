@@ -255,6 +255,8 @@ export function startWebUiProxy({ config, state, tokens, receiverStore }) {
       }
       if (pres.statusCode === 401) entry.auth.learn(pres.headers['www-authenticate']);
       res.writeHead(pres.statusCode, pres.statusMessage, fixResponseHeaders(pres, target, isSecure(req)));
+      lastServed.set(entry.r.id, Date.now());
+      if (state.receiverStatus.get(entry.r.id)?.reachable === false) state.setReceiverStatus(entry.r.id, { reachable: true, httpStatus: pres.statusCode });
       pres.pipe(res);
     });
     preq.on('timeout', () => preq.destroy(new Error('timeout')));
@@ -330,16 +332,33 @@ export function startWebUiProxy({ config, state, tokens, receiverStore }) {
   });
 
   // Reachability: a light request every minute, so the extension can show whether the receiver answers.
-  const checkOne = r => {
-      if (!r.webUrl) return;
-      const target = new URL(r.webUrl);
-      const req = client(target).request({ host: target.hostname, port: portOf(target), method: 'GET', path: '/', timeout: 6000, rejectUnauthorized: false }, res => {
-        res.resume();
-        state.setReceiverStatus(r.id, { reachable: true, httpStatus: res.statusCode });
-      });
-      req.on('timeout', () => req.destroy(new Error('timeout')));
-      req.on('error', err => state.setReceiverStatus(r.id, { reachable: false, error: err.code || err.message }));
-      req.end();
+  /** When a page of the receiver last loaded through the panel: proof it is reachable. */
+  const lastServed = new Map(); // id -> ms
+
+  // Some receiver web servers close the connection on bare requests, so the check asks like a browser
+  // does, tries once more before reporting a failure, and a page recently loaded through the panel counts.
+  const CHECK_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (compatible; Connect-NTRIP reachability check)',
+    Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+    Connection: 'close',
+  };
+  const probe = (r, path) => new Promise(resolve => {
+    const target = new URL(r.webUrl);
+    const req = client(target).request({
+      host: target.hostname, port: portOf(target), method: 'GET', path, timeout: 8000, rejectUnauthorized: false,
+      agent: false, headers: { ...CHECK_HEADERS, Host: target.host },
+    }, res => { res.resume(); resolve({ reachable: true, httpStatus: res.statusCode }); });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })));
+    req.on('error', err => resolve({ reachable: false, error: err.code || err.message }));
+    req.end();
+  });
+  const checkOne = async r => {
+    if (!r.webUrl) return;
+    let result = await probe(r, '/');
+    if (!result.reachable) result = await probe(r, '/');
+    // The connection worked moments ago through the panel: treat a one-off failure of the check as noise
+    if (!result.reachable && Date.now() - (lastServed.get(r.id) || 0) < 5 * 60_000) result = { reachable: true, httpStatus: 200 };
+    state.setReceiverStatus(r.id, result);
   };
   const check = () => config.receivers.forEach(checkOne);
   check();
