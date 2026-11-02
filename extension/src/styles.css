@@ -368,3 +368,19 @@ body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !im
 .email-text { width: 100%; box-sizing: border-box; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--text); resize: vertical; }
 .btn-link { display: inline-flex; align-items: center; text-decoration: none; }
 .email-table { margin-top: 8px; }
+
+/* Export picker */
+.export-dlg { display: none; flex-direction: column; gap: 8px; }
+.export-dlg[open] { display: flex; }
+.export-dlg .list-tools { margin: 0; }
+.pick-list { border: 1px solid var(--line); border-radius: 6px; overflow: auto; max-height: min(52vh, 460px); min-height: 120px; }
+.pick-row { display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 13px; }
+.pick-row:last-child { border-bottom: 0; }
+.pick-row:hover { background: var(--surface-2); }
+.pick-main, .pick-side { display: flex; flex-direction: column; min-width: 0; }
+.pick-side { text-align: right; }
+.pick-row .sub { color: var(--muted); font-size: 12px; }
+.export-dlg .list-tools-row label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--text); }
+.export-dlg .pick-row input { margin: 0; }
+.export-dlg .list-tools-row label { white-space: nowrap; }
+.export-dlg input[type="checkbox"] { width: auto; flex: none; }

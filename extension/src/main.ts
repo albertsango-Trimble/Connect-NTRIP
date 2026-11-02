@@ -708,24 +708,10 @@ function renderBases() {
     .join(''));
 }
 
-function renderDevices() {
-  const checks = $('#mountChecks');
-  const ticked = new Set([...checks.querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value));
-  checks.innerHTML = app.mountpoints
-    .map((m) => `<label><input type="checkbox" value="${esc(m.name)}"${ticked.has(m.name) ? ' checked' : ''}> ${esc(m.name)} <span class="hint">${esc(m.format)}</span></label>`)
-    .join('');
-
+/** Searches and sorts logins (used by the Logins list and the export picker). */
+function filterLogins(list: Device[], opts: { q: string; onlineOnly?: boolean; sortBy: string; company?: string }): Device[] {
   const live = new Set([...app.rovers.values()].map((r) => r.serial));
-  const el = $('#deviceList');
-  $('#deviceTools').classList.toggle('hidden', app.devices.length < 2);
-  if (!app.devices.length) {
-    $('#deviceCount').textContent = '';
-    el.innerHTML = '<div class="empty">No rover logins yet. Add one above using the receiver\'s serial number.</div>';
-    return;
-  }
-  const q = $<HTMLInputElement>('#deviceSearch').value.trim().toLowerCase();
-  const onlineOnly = $<HTMLInputElement>('#deviceOnlineOnly').checked;
-  const sortBy = $<HTMLSelectElement>('#deviceSort').value;
+  const q = opts.q.trim().toLowerCase();
   const text = (d: Device) => [d.serial, d.label, d.profile?.companyName, d.profile?.operatorName, d.profile?.companyEmail, d.profile?.operatorEmail, d.profile?.companyPhone, d.profile?.operatorPhone].join(' ').toLowerCase();
   const name = (d: Device) => (d.label || d.serial).toLowerCase();
   // Empty values sort last; ties fall back to machine name
@@ -743,7 +729,31 @@ function renderDevices() {
     newest: (a, b) => (b.created || '').localeCompare(a.created || ''),
     updated: (a, b) => (b.updated || b.created || '').localeCompare(a.updated || a.created || ''),
   };
-  const shown = app.devices.filter((d) => (!q || text(d).includes(q)) && (!onlineOnly || live.has(d.serial))).sort(sorters[sortBy] || sorters.name);
+  return list
+    .filter((d) => (!q || text(d).includes(q)) && (!opts.onlineOnly || live.has(d.serial)) && (opts.company === undefined || (d.profile?.companyName || '') === opts.company))
+    .sort(sorters[opts.sortBy] || sorters.name);
+}
+
+function renderDevices() {
+  const checks = $('#mountChecks');
+  const ticked = new Set([...checks.querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value));
+  checks.innerHTML = app.mountpoints
+    .map((m) => `<label><input type="checkbox" value="${esc(m.name)}"${ticked.has(m.name) ? ' checked' : ''}> ${esc(m.name)} <span class="hint">${esc(m.format)}</span></label>`)
+    .join('');
+
+  const live = new Set([...app.rovers.values()].map((r) => r.serial));
+  const el = $('#deviceList');
+  $('#deviceTools').classList.toggle('hidden', app.devices.length < 2);
+  if (!app.devices.length) {
+    $('#deviceCount').textContent = '';
+    el.innerHTML = '<div class="empty">No rover logins yet. Add one above using the receiver\'s serial number.</div>';
+    return;
+  }
+  const shown = filterLogins(app.devices, {
+    q: $<HTMLInputElement>('#deviceSearch').value,
+    onlineOnly: $<HTMLInputElement>('#deviceOnlineOnly').checked,
+    sortBy: $<HTMLSelectElement>('#deviceSort').value,
+  });
   $('#deviceCount').textContent = shown.length === app.devices.length ? `${app.devices.length} logins · ${live.size} online` : `Showing ${shown.length} of ${app.devices.length}`;
   if (!shown.length) {
     el.innerHTML = '<div class="empty">No logins match.</div>';
@@ -1354,11 +1364,80 @@ function safeFileName(s: string) {
   return s.replace(/[^A-Za-z0-9 _.-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'project';
 }
 
-$('#exportLogins').addEventListener('click', async () => {
+// Export picker: choose which logins go in the file
+const exportDlg = $<HTMLDialogElement>('#exportDlg');
+const exportPicked = new Set<string>();
+$('#exportLogins').addEventListener('click', () => {
+  if (!app.devices.length) {
+    alert('This project has no logins to export yet.');
+    return;
+  }
+  exportPicked.clear();
+  for (const d of app.devices) exportPicked.add(d.serial);
+  $<HTMLInputElement>('#exportSearch').value = '';
+  const companies = [...new Set(app.devices.map((d) => d.profile?.companyName || ''))].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b)));
+  $('#exportCompany').innerHTML = `<option value="*">All companies</option>${companies.map((c) => `<option value="${esc(c)}">${c ? esc(c) : '(no company)'}</option>`).join('')}`;
+  $<HTMLSelectElement>('#exportSort').value = $<HTMLSelectElement>('#deviceSort').value;
+  renderExportList();
+  if (!exportDlg.open) exportDlg.showModal();
+});
+
+function exportShown(): Device[] {
+  const company = $<HTMLSelectElement>('#exportCompany').value;
+  return filterLogins(app.devices, { q: $<HTMLInputElement>('#exportSearch').value, sortBy: $<HTMLSelectElement>('#exportSort').value, company: company === '*' ? undefined : company });
+}
+
+function renderExportList() {
+  const shown = exportShown();
+  const live = new Set([...app.rovers.values()].map((r) => r.serial));
+  $('#exportList').innerHTML = shown.length
+    ? shown
+        .map(
+          (d) => `<label class="pick-row"><input type="checkbox" data-pick="${esc(d.serial)}"${exportPicked.has(d.serial) ? ' checked' : ''}>
+        <span class="dot ${live.has(d.serial) ? 'online' : 'stale'}"></span>
+        <span class="pick-main"><b>${esc(d.label || d.serial)}</b><span class="sub">${esc(d.serial)}${d.enabled ? '' : ' · disabled'}</span></span>
+        <span class="pick-side">${esc(d.profile?.companyName || '')}<span class="sub">${esc(d.profile?.operatorName || '')}</span></span></label>`,
+        )
+        .join('')
+    : '<div class="empty">No logins match.</div>';
+  const shownPicked = shown.filter((d) => exportPicked.has(d.serial)).length;
+  $('#exportCount').textContent = `${exportPicked.size} of ${app.devices.length} selected${shown.length !== app.devices.length ? ` · ${shownPicked} of ${shown.length} shown` : ''}`;
+  const go = $<HTMLButtonElement>('#exportGo');
+  go.disabled = !exportPicked.size;
+  go.textContent = `Export ${exportPicked.size} login${exportPicked.size === 1 ? '' : 's'}`;
+  const all = $<HTMLInputElement>('#exportAllShown');
+  all.checked = shown.length > 0 && shownPicked === shown.length;
+  all.indeterminate = shownPicked > 0 && shownPicked < shown.length;
+}
+
+$('#exportSearch').addEventListener('input', renderExportList);
+$('#exportSort').addEventListener('change', renderExportList);
+$('#exportCompany').addEventListener('change', renderExportList);
+$('#exportList').addEventListener('change', (e) => {
+  const box = e.target as HTMLInputElement;
+  if (!box.dataset.pick) return;
+  if (box.checked) exportPicked.add(box.dataset.pick);
+  else exportPicked.delete(box.dataset.pick);
+  renderExportList();
+});
+$('#exportAllShown').addEventListener('change', (e) => {
+  const on = (e.target as HTMLInputElement).checked;
+  for (const d of exportShown()) on ? exportPicked.add(d.serial) : exportPicked.delete(d.serial);
+  renderExportList();
+});
+$('#exportNone').addEventListener('click', () => {
+  exportPicked.clear();
+  renderExportList();
+});
+$('#exportCancel').addEventListener('click', () => exportDlg.close());
+
+$('#exportGo').addEventListener('click', async () => {
+  const go = $<HTMLButtonElement>('#exportGo');
+  go.disabled = true;
   try {
-    const data = (await api('GET', '/api/devices/export')) as unknown as LoginExport;
+    const data = (await api('POST', '/api/devices/export', { serials: [...exportPicked] })) as unknown as LoginExport;
     if (!data.logins.length) {
-      alert('This project has no logins to export yet.');
+      alert('None of the selected logins could be exported.');
       return;
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1369,8 +1448,11 @@ $('#exportLogins').addEventListener('click', async () => {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    exportDlg.close();
   } catch (err) {
     alert(`Could not export: ${(err as Error).message}`);
+  } finally {
+    go.disabled = !exportPicked.size;
   }
 });
 

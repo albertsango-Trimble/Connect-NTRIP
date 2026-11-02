@@ -222,9 +222,13 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       }
 
       // GET /api/devices/export  -> this project's logins for importing into another project
-      if (req.method === 'GET' && url.pathname === '/api/devices/export') {
-        state.event('devices.exported', { project: P, by: user.email, count: Object.keys(devices.devices).length });
-        return send(res, 200, { format: EXPORT_FORMAT, version: 1, exportedAt: new Date().toISOString(), fromProject: project.name || P, logins: devices.exportAll() });
+      // (POST with {serials: [...]} exports just those logins)
+      if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/api/devices/export') {
+        const body = req.method === 'POST' ? await readJson(req, 512 * 1024) : {};
+        const wanted = Array.isArray(body.serials) ? new Set(body.serials.map(normaliseSerial)) : null;
+        const logins = devices.exportAll().filter(l => !wanted || wanted.has(l.serial));
+        state.event('devices.exported', { project: P, by: user.email, count: logins.length });
+        return send(res, 200, { format: EXPORT_FORMAT, version: 1, exportedAt: new Date().toISOString(), fromProject: project.name || P, logins });
       }
 
       // POST /api/devices/import {logins: [...], replace: bool}

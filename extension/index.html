@@ -167,6 +167,39 @@
     </aside>
   </main>
 
+  <dialog id="exportDlg" class="email-dlg export-dlg">
+    <div class="history-head">
+      <div style="min-width:0"><h3>Export logins</h3><div class="card-sub">Choose the logins to put in the file, then import it into another project.</div></div>
+    </div>
+    <div class="list-tools">
+      <input type="search" id="exportSearch" placeholder="Search serial, machine, company or operator" autocomplete="off">
+      <div class="list-tools-row">
+        <label>Company <select id="exportCompany"></select></label>
+        <label>Sort
+          <select id="exportSort">
+            <option value="name">Machine name</option>
+            <option value="serial">Serial number</option>
+            <option value="company">Company</option>
+            <option value="operator">Operator</option>
+            <option value="online">Online first</option>
+            <option value="newest">Newest first</option>
+            <option value="updated">Recently changed</option>
+          </select>
+        </label>
+      </div>
+      <div class="list-tools-row">
+        <label class="inline"><input type="checkbox" id="exportAllShown"> Select all shown</label>
+        <button type="button" class="link-btn" id="exportNone">Clear selection</button>
+        <span class="hint" id="exportCount"></span>
+      </div>
+    </div>
+    <div class="pick-list" id="exportList"></div>
+    <div class="form-actions">
+      <button type="button" class="primary-btn" id="exportGo">Export</button>
+      <button type="button" class="ghost-btn" id="exportCancel">Cancel</button>
+    </div>
+  </dialog>
+
   <dialog id="emailDlg" class="email-dlg">
     <div class="history-head">
       <div style="min-width:0"><h3 id="emailTitle">Email login details</h3><div class="card-sub" id="emailSub"></div></div>
