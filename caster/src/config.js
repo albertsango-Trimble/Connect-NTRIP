@@ -44,18 +44,31 @@ export function loadConfig() {
   cfg.webUi = { port: 8081, ...(cfg.webUi || {}) };
   if (process.env.WEBUI_PORT) cfg.webUi.port = Number(process.env.WEBUI_PORT);
   const ids = new Set();
-  for (const r of cfg.receivers) {
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(r.id || '')) throw new Error(`Receiver id "${r.id}" must be lower-case letters, digits and dashes (it becomes part of a web address)`);
-    if (ids.has(r.id)) throw new Error(`Duplicate receiver id: ${r.id}`);
-    ids.add(r.id);
-    r.mountpoints ??= [];
-    for (const mp of r.mountpoints) if (!names.has(mp)) throw new Error(`Receiver ${r.id} lists unknown mountpoint ${mp}`);
+  // A mistake in one receiver entry is reported and that entry skipped; it never stops the caster starting
+  const problem = r => {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(r.id || '')) return `id "${r.id}" must be lower-case letters, digits and dashes`;
+    if (ids.has(r.id)) return 'duplicate id';
     if (r.webUrl) {
-      const u = new URL(r.webUrl);
-      if (u.protocol !== 'http:') throw new Error(`Receiver ${r.id}: webUrl must be http://… (the caster adds HTTPS in front of it)`);
-      if (!cfg.webUi.domain) throw new Error('Set webUi.domain (e.g. "bases.example.com") to use receiver web UIs');
+      let u;
+      try { u = new URL(r.webUrl); } catch { return `web address "${r.webUrl}" isn't a valid address`; }
+      if (!/^https?:$/.test(u.protocol)) return 'web address must start with http:// or https://';
+      if (!cfg.webUi.domain) return 'webUi.domain is not set, so receiver web pages cannot be served';
     }
+    return null;
+  };
+  const good = [];
+  for (const r of cfg.receivers) {
+    const why = problem(r);
+    if (why) { console.warn(`Skipping receiver ${r.id || '(no id)'} in the config: ${why}`); continue; }
+    ids.add(r.id);
+    r.mountpoints = (r.mountpoints || []).filter(mp => {
+      if (names.has(mp)) return true;
+      console.warn(`Receiver ${r.id}: mountpoint ${mp} isn't known yet; it is linked once a base sends to it`);
+      return true; // kept: a base-named mountpoint may simply not have connected yet
+    });
+    good.push(r);
   }
+  cfg.receivers = good;
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   return cfg;
 }
