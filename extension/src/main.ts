@@ -822,7 +822,8 @@ function connect() {
     }
     if (e.code === 4001) {
       // The token may have expired: Connect sends a fresh one on extension.accessToken, which reconnects.
-      setPill('err', 'Not authorised');
+      setPill('err', e.reason && e.reason !== 'Not authorised' ? e.reason : 'Not authorised');
+      if (e.reason) console.warn(`[ntrip] caster refused the connection: ${e.reason}`);
       setTimeout(connect, 10_000);
       return;
     }
