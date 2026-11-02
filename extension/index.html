@@ -196,7 +196,8 @@
       <label>Caster dashboard URL
         <input name="casterUrl" placeholder="https://caster.example.com" required>
       </label>
-      <label>Development token <span class="hint">(only needed outside Trimble Connect)</span>
+      <p class="hint hidden" id="settingsProjectNote">Saved with this project, so everyone on the project connects to the same caster.</p>
+      <label id="settingsDevToken">Development token <span class="hint">(only needed outside Trimble Connect)</span>
         <input name="devToken" type="password" autocomplete="off">
       </label>
       <div class="form-actions">

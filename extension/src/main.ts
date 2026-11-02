@@ -9,7 +9,7 @@ import { RangeClient } from './core/geotiffTiles';
 import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, toProject } from './core/geo';
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
-import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
+import { loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord, ProjectInfo, LoginExport } from './types';
 
 const STALE_MS = 15_000;
@@ -65,8 +65,14 @@ function store(key: string, value?: string | null): string | null {
   }
   return null;
 }
+/**
+ * Inside Connect the caster URL belongs to the project: it is saved as a project file so everyone on the
+ * project connects to the same caster, and kept in this browser per project so it connects straight away.
+ * Outside Connect (local testing) it is kept in this browser only.
+ */
+let inConnectProject: string | null = null;
 const settings = {
-  get casterUrl() { return store('casterUrl') || ''; },
+  get casterUrl() { return (inConnectProject ? store(`casterUrl.${inConnectProject}`) : store('casterUrl')) || ''; },
   get devToken() { return store('devToken') || ''; },
 };
 
@@ -1613,15 +1619,27 @@ const dlg = $<HTMLDialogElement>('#settingsDlg');
 const settingsForm = $<HTMLFormElement>('#settingsForm');
 const sfield = (name: string) => settingsForm.elements.namedItem(name) as HTMLInputElement;
 function openSettings() {
-  sfield('casterUrl').value = settings.casterUrl;
+  // A project with no caster yet is offered the one last used in this browser
+  sfield('casterUrl').value = settings.casterUrl || store('casterUrl') || '';
+  $('#settingsProjectNote').classList.toggle('hidden', !inConnectProject);
+  $('#settingsDevToken').classList.toggle('hidden', !!inConnectProject);
   sfield('devToken').value = settings.devToken;
   if (!dlg.open) dlg.showModal();
 }
 $('#settingsBtn').addEventListener('click', openSettings);
 dlg.addEventListener('close', () => {
   if (dlg.returnValue !== 'save') return;
-  store('casterUrl', sfield('casterUrl').value.trim());
-  store('devToken', sfield('devToken').value.trim());
+  const url = sfield('casterUrl').value.trim().replace(/\/+$/, '');
+  store('casterUrl', url); // last used in this browser
+  if (inConnectProject) {
+    store(`casterUrl.${inConnectProject}`, url);
+    if (projectFiles) {
+      void saveProjectSettings(projectFiles, { version: 1, casterUrl: url, savedAt: Date.now() })
+        .catch((err) => alert(`Connected, but the caster address could not be saved to the project (${(err as Error).message}). Others on the project will need to enter it too.`));
+    }
+  } else {
+    store('devToken', sfield('devToken').value.trim());
+  }
   app.fitted = false;
   app.framedCount = 0;
   app.retry = 0;
@@ -1646,6 +1664,7 @@ connectToHost()
       return;
     }
     app.host = host;
+    inConnectProject = host.projectId;
     basemap.setProject(host.projectId);
     projectFiles = new ProjectFiles(host.projectId, host.token, host.location);
     currentProjectId = host.projectId;
@@ -1661,8 +1680,19 @@ connectToHost()
           .then((shared) => shared && restoreSharedGeoTiffs(project, host.projectId, shared))
           .catch((err) => console.warn('[ntrip] could not read the base maps shared with the project', err));
       }
-      if (first || !app.ws) connect();
-      first = false;
+      if (first) {
+        first = false;
+        // Use the caster saved with the project (it may have changed since this browser last opened it)
+        setPill('wait', 'Loading project settings…');
+        void loadProjectSettings(projectFiles!)
+          .then((saved) => {
+            if (saved && saved.casterUrl !== settings.casterUrl) store(`casterUrl.${host.projectId}`, saved.casterUrl);
+          })
+          .catch((err) => console.warn('[ntrip] could not read the caster settings saved with the project', err))
+          .finally(connect);
+        return;
+      }
+      if (!app.ws) connect();
     });
   })
   .catch((err) => {

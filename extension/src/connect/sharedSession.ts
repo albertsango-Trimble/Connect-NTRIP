@@ -57,3 +57,27 @@ export async function loadSharedPicture(project: ProjectFiles, id: string): Prom
   const item = await project.find(root.id, geotiffPictureName(id));
   return item ? project.download(item) : null;
 }
+
+/** The project's caster connection, saved in the project's top-level folder so everyone on the project uses it. */
+export const SETTINGS_FILE = 'ntrip-caster-settings.json';
+
+export interface ProjectSettings {
+  version: 1;
+  casterUrl: string;
+  savedAt: number;
+  savedBy?: string;
+}
+
+/** Reads the caster connection saved with the project, or null if none has been saved. */
+export async function loadProjectSettings(project: ProjectFiles): Promise<ProjectSettings | null> {
+  const root = await project.root();
+  const item = await project.find(root.id, SETTINGS_FILE);
+  if (!item) return null;
+  const data = JSON.parse(await (await project.download(item)).text()) as ProjectSettings;
+  return data && typeof data.casterUrl === 'string' && data.casterUrl ? data : null;
+}
+
+export async function saveProjectSettings(project: ProjectFiles, settings: ProjectSettings): Promise<void> {
+  const root = await project.root();
+  await project.writeFile(root.id, SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
