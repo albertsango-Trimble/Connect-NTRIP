@@ -7,6 +7,7 @@ import { connectToHost, type HostConnection } from './connect/workspace';
 import { ProjectFiles } from './connect/projectFiles';
 import { RangeClient } from './core/geotiffTiles';
 import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, toProject } from './core/geo';
+import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
 import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord } from './types';
@@ -255,6 +256,13 @@ map.on('load', () => {
   renderMap();
 });
 new ResizeObserver(() => map.resize()).observe(mapEl);
+// Elevations need the geoid grid and the project's coordinate system, which arrive a moment after start
+const redrawPositions = () => {
+  renderBases();
+  for (const [key] of baseMarkers) if (popupFor === `base:${key}`) popup.setHTML(basePopup(key));
+};
+onGeoidValue(redrawPositions);
+onGeoChange(redrawPositions);
 // Once the person pans, zooms or turns the map, leave it where they put it
 for (const ev of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'] as const) {
   map.on(ev, (e: { originalEvent?: Event }) => {
@@ -407,13 +415,20 @@ function renderMap() {
 function basePopup(key: string) {
   const mounts = app.mountpoints.filter((m) => key.split('|').includes(m.name));
   const best = mounts.find((m) => m.online && m.position?.from !== 'config') || mounts[0];
-  const rows = mounts.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.format)} · ${m.online ? `${rate(m.rateBps)} · ${m.rovers} machine${m.rovers === 1 ? '' : 's'}` : 'offline'}</td></tr>`).join('');
+  const rows = mounts.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.format)} · ${m.online ? rate(m.rateBps) : 'offline'}</td></tr>`).join('');
   const names = key.split('|');
   const receiver = app.receivers.find((r) => r.webUi && r.mountpoints.some((m) => names.includes(m)));
   return `<b>${esc(receiver?.name || 'Base station')}</b>${receiver?.model ? `<div style="color:#6a6e79;font-size:12px">${esc(receiver.model)}</div>` : ''}<table>${rows}
-    ${best?.position ? `<tr><td>Position</td><td>${best.position.lat.toFixed(7)}, ${best.position.lon.toFixed(7)}<br><small>from ${esc(best.position.from)}</small></td></tr>` : ''}
+    ${best?.position ? popupPosition(best.position) : ''}
   </table>${receiver ? `<button class="popup-btn" data-webui="${esc(receiver.id)}">Open receiver web UI</button>` : ''}
-  <button class="popup-btn" style="background:none;color:var(--brand);border:1px solid var(--line)" data-place="${esc(names[0])}" data-place-group="${esc(names.join('|'))}">Set position</button>`;
+  ${mounts.every((m) => !positionFromData(m)) ? `<button class="popup-btn" style="background:none;color:var(--brand);border:1px solid var(--line)" data-place="${esc(names[0])}" data-place-group="${esc(names.join('|'))}">Set position</button>` : ''}`;
+}
+
+function popupPosition(p: NonNullable<Mountpoint['position']>) {
+  const c = projectCoords(p);
+  const rows = c.rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join('');
+  const elev = c.elevation ? `<tr><td>Elevation</td><td>${esc(c.elevation.text)}<br><small>${esc(c.elevation.note)}</small></td></tr>` : '';
+  return `${rows}${elev}<tr><td></td><td><small>${esc(c.crs)} · from ${esc(p.from)}</small></td></tr>`;
 }
 
 function dropRover(id: string) {
@@ -513,6 +528,47 @@ function msmSummary(types: number[]) {
   return [...byLevel.entries()].sort((a, b) => a[0] - b[0]).map(([lvl, systems]) => `MSM${lvl}: ${systems.join(', ')}`).join(' · ');
 }
 
+const FROM_DATA = new Set(['RTCM 1005/1006', 'CMR Type 1']);
+/** True when the base's own data gives its position, so there is nothing to set by hand. */
+const positionFromData = (m: Mountpoint) => !!m.position && FROM_DATA.has(m.position.from);
+
+/**
+ * The base position in the project's coordinate system: easting and northing, and the elevation in the
+ * project's vertical datum when its coordinate system names a geoid model (otherwise the ellipsoidal height).
+ * Falls back to latitude/longitude when the project has no coordinate system.
+ */
+function projectCoords(p: { lat: number; lon: number; h: number | null }) {
+  const en = getEpsgCode() ? toProject(p.lon, p.lat) : null;
+  const crs = getProjectCrsName() || (getEpsgCode() ? `EPSG:${getEpsgCode()}` : '');
+  const geoid = projectGeoid();
+  let elevation: { text: string; note: string } | null = null;
+  if (p.h != null) {
+    if (geoid) {
+      const n = geoidSeparation(p.lat, p.lon);
+      elevation = n === undefined
+        ? { text: '…', note: `${geoid.datum}, from ${geoid.name}` }
+        : n === null
+          ? { text: `${p.h.toFixed(3)} m`, note: `ellipsoidal (${geoid.name} not available here)` }
+          : { text: `${(p.h - n).toFixed(3)} m`, note: `${geoid.datum} (${geoid.name})` };
+    } else {
+      elevation = { text: `${p.h.toFixed(3)} m`, note: 'ellipsoidal height (no geoid in the project\'s coordinate system)' };
+    }
+  }
+  return en && Number.isFinite(en[0])
+    ? { rows: [['Easting', `${en[0].toFixed(3)} m`], ['Northing', `${en[1].toFixed(3)} m`]] as [string, string][], crs, elevation }
+    : { rows: [['Latitude', p.lat.toFixed(7)], ['Longitude', p.lon.toFixed(7)]] as [string, string][], crs: 'WGS84', elevation };
+}
+
+/** Position lines for the Bases tab. */
+function positionLines(m: Mountpoint) {
+  if (!m.position) return '';
+  const c = projectCoords(m.position);
+  const parts = c.rows.map(([k, v]) => `${k} ${v}`);
+  if (c.elevation) parts.push(`Elevation ${c.elevation.text}`);
+  return `<div class="pos-lines">${parts.map((x) => `<span>${esc(x)}</span>`).join('')}</div>
+    <div class="card-sub">${esc(c.crs)}${c.elevation ? ` · elevation ${esc(c.elevation.note)}` : ''} · from ${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''}</div>`;
+}
+
 function receiverStatus(r: Receiver) {
   if (r.reachable === null || r.reachable === undefined) return { cls: 'stale', text: 'Checking…' };
   return r.reachable ? { cls: 'online', text: 'Web UI reachable' } : { cls: 'offline', text: `Web UI not reachable${r.error ? ` (${r.error})` : ''}` };
@@ -557,21 +613,20 @@ function renderBases() {
       <div class="grid">
         <div><span>Status</span><b>${m.online ? 'Online' : m.lastSeen ? `Last seen ${when(Date.parse(m.lastSeen))}` : 'Offline'}</b></div>
         <div><span>Data in</span><b>${m.online ? rate(m.rateBps) : '—'}</b></div>
-        <div><span>Machines</span><b>${m.rovers}</b></div>
-        <div><span>Up for</span><b>${m.online && m.connectedAt ? duration(serverNow() - m.connectedAt) : '—'}</b></div>
         <div><span>Total in</span><b>${m.online ? bytes(m.bytesIn) : '—'}</b></div>
+        <div><span>Up for</span><b>${m.online && m.connectedAt ? duration(serverNow() - m.connectedAt) : '—'}</b></div>
         <div><span>Last data</span><b>${m.lastDataAt ? `${duration(serverNow() - m.lastDataAt)} ago` : '—'}</b></div>
       </div>
-      ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''})</div>` : ''}
+      ${positionLines(m)}
       ${m.messageTypes?.length && msmSummary(m.messageTypes) ? `<div class="card-sub" style="margin-top:6px">${esc(msmSummary(m.messageTypes))}</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
       ${m.manualPosition && m.position?.from !== 'set by hand' ? `<div class="card-sub" style="margin-top:4px">Position set by hand is on standby: the base's data gives the position while it is sending.</div>` : ''}
       ${!m.position ? '<div class="warn">No position: this base isn\'t on the map. Use <b>Set position</b> to place it.</div>' : ''}
-      <div class="actions" style="margin-top:6px">
-        <button class="link-btn" data-place="${esc(m.name)}">${m.manualPosition ? 'Change set position' : 'Set position'}</button>
+      ${!positionFromData(m) || (m.auto && !m.online) ? `<div class="actions" style="margin-top:6px">
+        ${!positionFromData(m) ? `<button class="link-btn" data-place="${esc(m.name)}">${m.manualPosition ? 'Change set position' : 'Set position'}</button>` : ''}
         ${m.auto && !m.online ? `<button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button>` : ''}
-      </div>
+      </div>` : ''}
     </div>`,
     )
     .join(''));

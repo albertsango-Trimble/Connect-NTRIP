@@ -121,6 +121,12 @@ function textFromCsi(csib64: string | undefined): string | undefined {
 }
 
 let projectCrsName: string | null = null;
+let projectCrsText: string | null = null;
+
+/** Readable text inside the project's coordinate system definition (it can name the geoid model). */
+export function getProjectCrsText(): string | null {
+  return projectCrsText;
+}
 let epsgDetected = false;
 
 /** The coordinate system name the Connect project reports, if any. */
@@ -196,6 +202,7 @@ export async function setProjectEpsg(code: string): Promise<void> {
  */
 export async function initGeoreference(projectCrs?: { name?: string; csib64?: string }): Promise<void> {
   projectCrsName = projectCrs?.name ?? null;
+  projectCrsText = textFromCsi(projectCrs?.csib64) ?? null;
 
   let fromProject = parseEpsgCode(projectCrs?.name) ?? parseEpsgCode(textFromCsi(projectCrs?.csib64));
   if (!fromProject && projectCrs?.name) {
