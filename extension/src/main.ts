@@ -1255,9 +1255,6 @@ function openReceiverForm(id: string | null) {
   rfield('rname').value = r?.name ?? '';
   rfield('rmodel').value = r?.model ?? '';
   rfield('rurl').value = r?.webUrl ?? '';
-  rfield('ruser').value = r?.username ?? '';
-  rfield('rpass').value = '';
-  rfield('rpass').placeholder = r?.hasPassword ? 'Saved (leave blank to keep)' : '';
   const ticked = new Set(r?.mountpoints ?? []);
   $('#receiverMounts').innerHTML = app.mountpoints.length
     ? app.mountpoints.map((m) => `<label><input type="checkbox" value="${esc(m.name)}"${ticked.has(m.name) ? ' checked' : ''}> ${esc(m.name)} <span class="hint">${esc(m.format)}</span></label>`).join('')
@@ -1275,10 +1272,8 @@ receiverForm.addEventListener('submit', async (e) => {
     name: rfield('rname').value.trim(),
     model: rfield('rmodel').value.trim(),
     webUrl: rfield('rurl').value.trim(),
-    username: rfield('ruser').value.trim(),
     mountpoints: [...$('#receiverMounts').querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value),
   };
-  if (rfield('rpass').value) body.password = rfield('rpass').value; // blank keeps the saved password
   const msg = $('#receiverMsg');
   $<HTMLButtonElement>('#receiverSave').disabled = true;
   try {

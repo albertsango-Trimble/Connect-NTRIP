@@ -166,14 +166,10 @@
   <dialog id="receiverDlg">
     <form method="dialog" id="receiverForm" class="form">
       <h3 id="receiverTitle">Add base receiver</h3>
-      <p class="hint" style="margin:0 0 10px">The caster opens this receiver's own web interface for you. Its web address must be reachable from the caster server (for example a port forward or VPN to the site).</p>
+      <p class="hint" style="margin:0 0 10px">The caster opens this receiver's own web interface for you. Its web address must be reachable from the caster server (for example a port forward or VPN to the site). You sign in to the receiver on its own page.</p>
       <label>Name <input name="rname" required maxlength="60" placeholder="e.g. R750-2 base" autocomplete="off"></label>
       <label>Model (optional) <input name="rmodel" maxlength="60" placeholder="e.g. Trimble R750-2" autocomplete="off"></label>
       <label>Web address <input name="rurl" required placeholder="http://mybase.ddns.net:8080" autocomplete="off" spellcheck="false"></label>
-      <div class="two">
-        <label>Receiver web user <input name="ruser" maxlength="64" autocomplete="off" placeholder="admin"></label>
-        <label>Password <input name="rpass" type="password" maxlength="128" autocomplete="new-password"></label>
-      </div>
       <fieldset>
         <legend>Its mountpoints <span class="hint">(links the receiver to its streams on the map)</span></legend>
         <div id="receiverMounts" class="checks"></div>
