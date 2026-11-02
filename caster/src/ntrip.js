@@ -14,8 +14,8 @@ const MAX_HEADER = 8192;
 const MAX_CLIENT_BUFFER = 512 * 1024; // drop rovers that can't keep up
 const SERVER = 'Connect-NTRIP/0.1';
 
-export function startNtripServer({ config, state, devices }) {
-  const server = net.createServer(sock => acceptConnection(sock, { config, state, devices }));
+export function startNtripServer({ config, state }) {
+  const server = net.createServer(sock => acceptConnection(sock, { config, state }));
   server.on('error', err => console.error('NTRIP server error', err));
   server.listen(config.ntripPort, () => console.log(`NTRIP caster listening on :${config.ntripPort}`));
   return server;
@@ -176,7 +176,7 @@ function handleSourceV1(sock, req, rest, ctx) {
   const m = sourceMountpoint(ctx.config, mount, req.a, req.headers['ntrip-str']);
   if (!m) {
     const known = findMountpoint(ctx.config, mount);
-    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
+    ctx.state.event('source.rejected', { project: known ? ctx.config.projects.projectOf(known) : undefined, mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
     sock.end('ERROR - Bad Password\r\n');
     return;
   }
@@ -195,7 +195,7 @@ function handleSourceV2(sock, req, rest, ctx) {
       sock.end(httpStatus(404, 'Not Found'));
       return;
     }
-    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
+    ctx.state.event('source.rejected', { project: known ? ctx.config.projects.projectOf(known) : undefined, mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
     sock.end(httpStatus(401, 'Unauthorized', `WWW-Authenticate: Basic realm="/${mount}"\r\n`));
     return;
   }
@@ -224,6 +224,7 @@ function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) 
     protocol,
     agent: req.headers['source-agent'] || req.headers['user-agent'] || '',
     monitor: new FormatMonitor(),
+    project: config.projects.projectOf(m),
     close: () => sock.destroy(),
   };
   state.addSource(src);
@@ -250,7 +251,7 @@ function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) 
 }
 
 // ---------------------------------------------------------------- rovers
-function handleClient(sock, req, mount, rest, { config, state, devices }) {
+function handleClient(sock, req, mount, rest, { config, state }) {
   const m = findMountpoint(config, mount);
   if (!m) {
     // NTRIP 1 convention: unknown mountpoint gets the sourcetable
@@ -259,12 +260,15 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
     return;
   }
 
+  // Rovers sign in with the logins of the project the mountpoint belongs to
+  const project = config.projects.projectOf(m);
+  const devices = config.projects.devicesFor(project);
   const auth = basicAuth(req.headers);
   const serial = normaliseSerial(auth?.user);
   const result = auth ? devices.authenticate(serial, auth.pass, mount) : { ok: false, reason: 'no credentials' };
   if (!result.ok) {
-    state.event('rover.rejected', { serial: serial || '(none)', mount, addr: req.addr, reason: result.reason });
-    if (serial && devices.get(serial)) state.recordRejected(serial, { mount, addr: req.addr, reason: result.reason, agent: req.headers['user-agent'] || '' });
+    state.event('rover.rejected', { project, serial: serial || '(none)', mount, addr: req.addr, reason: result.reason });
+    if (serial && devices.get(serial)) state.recordRejected(project, serial, { mount, addr: req.addr, reason: result.reason, agent: req.headers['user-agent'] || '' });
     const realm = `WWW-Authenticate: Basic realm="/${mount}"\r\n`;
     sock.end(req.v2 ? httpStatus(401, 'Unauthorized', realm) : `HTTP/1.0 401 Unauthorized\r\n${realm}\r\n`);
     return;
@@ -278,6 +282,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
 
   const client = {
     id: state.newId(),
+    project,
     serial,
     label: result.device.label,
     mount,
@@ -287,7 +292,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
     send(data) {
       if (sock.destroyed) return;
       if (sock.writableLength > MAX_CLIENT_BUFFER) {
-        state.event('rover.overflow', { serial, mount });
+        state.event('rover.overflow', { project, serial, mount });
         client.endReason = 'dropped: could not keep up with the data';
         sock.destroy();
         return;

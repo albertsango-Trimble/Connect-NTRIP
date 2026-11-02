@@ -34,18 +34,18 @@ export class CasterState extends EventEmitter {
   addSource(src) {
     const existing = this.sources.get(src.mount);
     if (existing) {
-      this.event('source.replaced', { mount: src.mount, oldAddr: existing.addr });
+      this.event('source.replaced', { project: src.project, mount: src.mount, oldAddr: existing.addr });
       existing.close();
     }
     Object.assign(src, { connectedAt: Date.now(), bytesIn: 0, lastBytes: 0, rateBps: 0, lastDataAt: null });
     this.sources.set(src.mount, src);
-    this.event('source.connected', { mount: src.mount, addr: src.addr, protocol: src.protocol });
+    this.event('source.connected', { project: src.project, mount: src.mount, addr: src.addr, protocol: src.protocol });
   }
 
   removeSource(src, reason) {
     if (this.sources.get(src.mount) !== src) return;
     this.sources.delete(src.mount);
-    this.event('source.disconnected', { mount: src.mount, addr: src.addr, reason });
+    this.event('source.disconnected', { project: src.project, mount: src.mount, addr: src.addr, reason });
   }
 
   relay(src, data) {
@@ -59,10 +59,10 @@ export class CasterState extends EventEmitter {
 
   // ---- clients ----
   addClient(client) {
-    // One session per serial number: a reconnecting rover replaces its stale session.
+    // One session per serial number in a project: a reconnecting rover replaces its stale session.
     for (const other of this.clients.values()) {
-      if (other.serial === client.serial) {
-        this.event('rover.replaced', { serial: client.serial, oldAddr: other.addr });
+      if (other.serial === client.serial && other.project === client.project) {
+        this.event('rover.replaced', { project: client.project, serial: client.serial, oldAddr: other.addr });
         other.endReason = 'replaced by a new connection from the same receiver';
         other.close();
       }
@@ -73,7 +73,7 @@ export class CasterState extends EventEmitter {
     });
     this.clients.set(client.id, client);
     this.event('rover.connected', {
-      id: client.id, serial: client.serial, label: client.label, mount: client.mount,
+      project: client.project, id: client.id, serial: client.serial, label: client.label, mount: client.mount,
       addr: client.addr, protocol: client.protocol, agent: client.agent,
     });
   }
@@ -81,8 +81,8 @@ export class CasterState extends EventEmitter {
   removeClient(client, reason) {
     if (!this.clients.delete(client.id)) return;
     reason = client.endReason || reason;
-    this.event('rover.disconnected', { id: client.id, serial: client.serial, mount: client.mount, reason });
-    this.history?.append(client.serial, this.sessionRecord(client, reason));
+    this.event('rover.disconnected', { project: client.project, id: client.id, serial: client.serial, mount: client.mount, reason });
+    this.projects?.historyFor(client.project).append(client.serial, this.sessionRecord(client, reason));
   }
 
   /** Adds the time since the last GGA to the fix type it reported (gaps over 30 s count as no position). */
@@ -123,8 +123,8 @@ export class CasterState extends EventEmitter {
   }
 
   /** A refused login for a known rover, kept in its history. */
-  recordRejected(serial, data) {
-    this.history?.append(serial, { type: 'rejected', time: Date.now(), ...data });
+  recordRejected(project, serial, data) {
+    this.projects?.historyFor(project).append(serial, { type: 'rejected', time: Date.now(), ...data });
   }
 
   updateGga(client, gga) {
@@ -148,12 +148,13 @@ export class CasterState extends EventEmitter {
     const prev = this.receiverStatus.get(id);
     this.receiverStatus.set(id, { ...status, checkedAt: Date.now() });
     if (prev && prev.reachable !== status.reachable) {
-      this.event(status.reachable ? 'receiver.reachable' : 'receiver.unreachable', { receiver: id, ...(status.error ? { reason: status.error } : {}) });
+      const project = this.projects?.projectOf(this.config.receivers.find(r => r.id === id));
+      this.event(status.reachable ? 'receiver.reachable' : 'receiver.unreachable', { project, receiver: id, ...(status.error ? { reason: status.error } : {}) });
     }
   }
 
-  receiverViews() {
-    return this.config.receivers.map(r => ({
+  receiverViews(project) {
+    return this.config.receivers.filter(r => this.projects?.projectOf(r) === project).map(r => ({
       id: r.id,
       name: r.name || r.id,
       model: r.model || '',
@@ -273,17 +274,26 @@ export class CasterState extends EventEmitter {
     };
   }
 
-  snapshot() {
+  /** Mountpoints, machines, receivers and log of one project. */
+  mountpointViews(project) {
+    return this.config.mountpoints.filter(m => this.projects?.projectOf(m) === project).map(m => this.sourceView(m));
+  }
+
+  roverViews(project, withTrack = false) {
+    return [...this.clients.values()].filter(c => c.project === project).map(c => this.clientView(c, withTrack));
+  }
+
+  snapshot(project) {
     return {
       casterName: this.config.casterName || 'NTRIP Caster',
       host: this.config.publicHost || null,
       ntripPort: this.config.ntripPort,
       serverTime: Date.now(),
       startedAt: this.startedAt,
-      mountpoints: this.config.mountpoints.map(m => this.sourceView(m)),
-      rovers: [...this.clients.values()].map(c => this.clientView(c, true)),
-      receivers: this.receiverViews(),
-      log: this.log.slice(-100),
+      mountpoints: this.mountpointViews(project),
+      rovers: this.roverViews(project, true),
+      receivers: this.receiverViews(project),
+      log: this.log.filter(ev => ev.project === project).slice(-100),
     };
   }
 }

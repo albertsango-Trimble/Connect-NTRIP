@@ -39,28 +39,39 @@ export class AutoMountpoints {
       lon: rec.lon ?? null,
       h: rec.h ?? null,
       positionFrom: rec.positionFrom || null,
+      project: rec.project || null,
     };
   }
 
   save() {
     const list = this.config.mountpoints.filter(m => m.auto).map(m => ({
       name: m.name, identifier: m.identifier, format: m.format, formatDetails: m.formatDetails, navSystem: m.navSystem,
-      created: m.created, lastSeen: m.lastSeen, lat: m.lat, lon: m.lon, h: m.h, positionFrom: m.positionFrom,
+      created: m.created, lastSeen: m.lastSeen, lat: m.lat, lon: m.lon, h: m.h, positionFrom: m.positionFrom, project: m.project || null,
     }));
     fs.writeFileSync(this.file + '.tmp', JSON.stringify({ mountpoints: list }, null, 2), { mode: 0o600 });
     fs.renameSync(this.file + '.tmp', this.file);
   }
 
   /**
-   * Called for a base asking for a mountpoint that isn't configured. Returns the mountpoint
-   * (creating it if needed) when the shared password is right, otherwise null.
+   * Called for a base asking for a mountpoint that isn't configured. Each project has its own base password:
+   * an existing mountpoint needs its project's password; a new name is created in the project whose
+   * password it is. Returns the mountpoint, or null when the password doesn't fit.
    */
   claim(name, password, strHeader) {
-    if (!this.enabled || password !== this.opts.sourcePassword || !NAME_RE.test(name)) return null;
+    const projects = this.config.projects;
+    if (!password || !NAME_RE.test(name)) return null;
     let m = this.config.mountpoints.find(x => x.name === name);
     if (m && !m.auto) return null; // configured mountpoints keep their own passwords
-    if (!m) {
-      m = this.toMountpoint({ name, created: new Date().toISOString() });
+    if (m) {
+      if (password !== projects.passwordFor(projects.projectOf(m))) return null;
+    } else {
+      let project = projects.byPassword(password);
+      if (!project) {
+        // Before any project has opened the extension, the config file's base password still works
+        if (projects.legacyOwner || !this.enabled || password !== this.opts.sourcePassword) return null;
+        project = null;
+      }
+      m = this.toMountpoint({ name, created: new Date().toISOString(), project });
       this.config.mountpoints.push(m);
     }
     // NTRIP 2 bases can describe themselves with an Ntrip-STR header: STR;mount;identifier;format;details;carrier;nav;network;country;lat;lon;...

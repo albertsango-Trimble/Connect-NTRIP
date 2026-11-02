@@ -90,6 +90,13 @@
       <div class="tab-body" id="tab-rovers"></div>
       <div class="tab-body hidden" id="tab-bases"></div>
       <div class="tab-body hidden" id="tab-devices">
+        <div class="login-tools">
+          <span class="hint">Logins belong to this project. Copy them to another project:</span>
+          <button type="button" class="ghost-btn" id="exportLogins" title="Download this project's logins to import into another project">Export</button>
+          <button type="button" class="ghost-btn" id="importLogins" title="Add logins exported from another project">Import</button>
+          <input type="file" id="importFile" accept=".json,application/json" hidden>
+        </div>
+        <div id="importPreview" class="card form hidden"></div>
         <form id="deviceForm" class="card form">
           <h3 id="deviceFormTitle">Add rover login</h3>
           <label>Receiver serial number

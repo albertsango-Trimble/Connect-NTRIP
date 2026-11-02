@@ -315,3 +315,16 @@ dialog input { width: 100%; }
 #receiverDlg .checks label { flex-direction: row; align-items: center; gap: 5px; margin: 0; color: var(--text); font-size: 13px; }
 #receiverDlg .checks { flex-direction: column; gap: 6px; }
 #receiverDlg .checks input { width: auto; flex: none; margin: 0; }
+
+/* Connect a base to this project */
+.connect-base { margin-bottom: 10px; }
+.connect-base summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.connect-base .card-sub { margin: 6px 0; line-height: 1.45; }
+.kv { display: grid; grid-template-columns: 100px 1fr auto auto; gap: 6px; align-items: center; padding: 3px 0; font-size: 13px; }
+.kv > span:first-child { color: var(--muted); }
+.kv code { font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; overflow-wrap: anywhere; }
+/* Export / import logins */
+.login-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.login-tools .hint { flex: 1 1 160px; }
+#importPreview { margin-bottom: 10px; }
+.import-list { margin: 6px 0; padding-left: 18px; max-height: 180px; overflow: auto; font-size: 13px; }

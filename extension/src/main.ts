@@ -10,7 +10,7 @@ import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoCha
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
 import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
-import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord } from './types';
+import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord, ProjectInfo, LoginExport } from './types';
 
 const STALE_MS = 15_000;
 const FIX_COLOURS: Record<number, string> = { 0: '--q0', 1: '--q1', 2: '--q2', 3: '--q1', 4: '--q4', 5: '--q5', 6: '--q1', 7: '--q1', 8: '--q1', 9: '--q2' };
@@ -87,7 +87,16 @@ const app = {
   /** How many things were on the map when it was last framed automatically */
   framedCount: 0,
   editing: null as string | null,
+  project: null as ProjectInfo | null,
+  showBasePassword: false,
+  pendingImport: null as LoginExport | null,
+  /** Whether the "Connect a base" card is open; null = open only while the project has no bases */
+  baseCardOpen: null as boolean | null,
 };
+
+/** The Connect project the extension is open in ("local-dev" when opened outside Connect for testing). */
+const projectId = () => app.host?.projectId || 'local-dev';
+const projectName = () => app.host?.projectName || (app.host ? '' : 'Local testing');
 let projectFiles: ProjectFiles | null = null;
 let currentProjectId: string | null = null;
 
@@ -600,13 +609,33 @@ function renderReceivers() {
     .join('')}<div class="section-title">Mountpoints</div>`;
 }
 
+/** How to point a base receiver at this project: caster address, port and the project's base password. */
+function renderBaseConnection() {
+  const p = app.project;
+  if (!p) return '';
+  const host = p.baseConnection.host || $('#casterAddr').textContent?.split(':')[0] || '';
+  const pw = p.baseConnection.password;
+  const open = app.baseCardOpen ?? !app.mountpoints.length;
+  return `
+    <details class="card connect-base"${open ? ' open' : ''}>
+      <summary><b>Connect a base to this project</b><span class="hint">${esc(p.name || 'This project')}</span></summary>
+      <p class="card-sub">In the base receiver's NTRIP Server (caster) output, enter these. Choose any mountpoint name: it appears here when the base connects. Bases using another project's password stay in that project.</p>
+      <div class="kv"><span>Caster address</span><code>${esc(host)}</code><button class="link-btn" data-copy="${esc(host)}">Copy</button></div>
+      <div class="kv"><span>Port</span><code>${p.baseConnection.port}</code><button class="link-btn" data-copy="${p.baseConnection.port}">Copy</button></div>
+      <div class="kv"><span>Password</span><code>${app.showBasePassword ? esc(pw) : '••••••••••••••'}</code>
+        <button class="link-btn" data-show-base-pw>${app.showBasePassword ? 'Hide' : 'Show'}</button><button class="link-btn" data-copy="${esc(pw)}">Copy</button></div>
+      <div class="kv"><span>Username</span><span class="hint">Leave blank (NTRIP v2 bases may need any name)</span></div>
+      <div class="actions" style="margin-top:6px"><button class="link-btn danger" data-new-base-pw>Change password…</button></div>
+    </details>`;
+}
+
 function renderBases() {
   const el = $('#tab-bases');
   if (!app.mountpoints.length) {
-    morph(el, `${renderReceivers()}<div class="empty">No bases connected yet.</div>`);
+    morph(el, `${renderBaseConnection()}${renderReceivers()}<div class="empty">No bases in this project yet.</div>`);
     return;
   }
-  morph(el, renderReceivers() + app.mountpoints
+  morph(el, renderBaseConnection() + renderReceivers() + app.mountpoints
     .map(
       (m) => `
     <div class="card">
@@ -693,6 +722,10 @@ function describe(ev: LogEvent) {
     case 'source.rejected': return `Base refused on ${ev.mount}: ${ev.reason}`;
     case 'source.timeout': return `Base on ${ev.mount} stopped sending data`;
     case 'source.replaced': return `Base on ${ev.mount} reconnected; old stream dropped`;
+    case 'devices.imported': return `Logins imported by ${ev.by}: ${ev.added} added, ${ev.replaced} replaced, ${ev.skipped} skipped`;
+    case 'devices.exported': return `${ev.count} login(s) exported by ${ev.by}`;
+    case 'project.base_password_changed': return `Base password changed by ${ev.by}: bases need the new one to connect`;
+    case 'project.took_over_existing': return `Existing bases, logins and receivers moved into this project (${ev.by})`;
     case 'device.added': return `Login ${ev.serial} added by ${ev.by}`;
     case 'device.updated': return `Login ${ev.serial} updated (${((ev.fields as string[]) || []).join(', ')}) by ${ev.by}`;
     case 'device.removed': return `Login ${ev.serial} deleted by ${ev.by}`;
@@ -757,10 +790,15 @@ function connect() {
   setPill('wait', 'Connecting…');
   const ws = new WebSocket(`${base.replace(/^http/i, 'ws')}/ws`);
   app.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: token() }));
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: token(), project: projectId(), projectName: projectName() }));
   ws.onmessage = (e) => handleMessage(JSON.parse(e.data as string) as CasterMessage);
   ws.onclose = (e) => {
     app.ws = null;
+    if (e.code === 4003) {
+      setPill('err', e.reason || 'No access to this project');
+      setTimeout(connect, 60_000);
+      return;
+    }
     if (e.code === 4001) {
       // The token may have expired: Connect sends a fresh one on extension.accessToken, which reconnects.
       setPill('err', 'Not authorised');
@@ -786,6 +824,7 @@ function handleMessage(msg: CasterMessage) {
     app.log = s.log;
     app.devices = msg.devices;
     app.receivers = s.receivers ?? [];
+    app.project = msg.project;
     renderAll();
   } else if (msg.type === 'tick') {
     app.serverOffset = msg.serverTime - Date.now();
@@ -814,6 +853,9 @@ function handleMessage(msg: CasterMessage) {
     if (app.log.length > 300) app.log.shift();
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
+  } else if (msg.type === 'project') {
+    app.project = msg.project;
+    renderBases();
   } else if (msg.type === 'receivers') {
     app.receivers = msg.receivers;
     renderBases();
@@ -833,7 +875,12 @@ async function api(method: string, path: string, body?: unknown) {
   const base = settings.casterUrl.replace(/\/+$/, '');
   const res = await fetch(base + path, {
     method,
-    headers: { Authorization: `Bearer ${token()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: {
+      Authorization: `Bearer ${token()}`,
+      'X-Connect-Project': projectId(),
+      'X-Connect-Project-Name': encodeURIComponent(projectName()),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -1033,6 +1080,125 @@ document.addEventListener('click', (e) => {
   if (!t) return;
   if (t.dataset.webui) void openWebUi(t.dataset.webui);
   else if (t.dataset.webuiTab) void openWebUiTab(t.dataset.webuiTab);
+});
+
+// "Connect a base to this project" card
+$('#tab-bases').addEventListener('toggle', (e) => {
+  const d = e.target as HTMLDetailsElement;
+  if (d.classList?.contains('connect-base')) app.baseCardOpen = d.open;
+}, true);
+$('#tab-bases').addEventListener('click', async (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-copy], [data-show-base-pw], [data-new-base-pw]');
+  if (!t) return;
+  if (t.dataset.copy !== undefined) {
+    try {
+      await navigator.clipboard.writeText(t.dataset.copy);
+      t.textContent = 'Copied';
+    } catch {
+      t.textContent = 'Copy blocked';
+    }
+    setTimeout(() => { t.textContent = 'Copy'; }, 1500);
+  } else if (t.hasAttribute('data-show-base-pw')) {
+    app.showBasePassword = !app.showBasePassword;
+    renderBases();
+  } else if (t.hasAttribute('data-new-base-pw')) {
+    if (!confirm('Give this project a new base password?\n\nBases using the current password will be refused the next time they connect, until you enter the new one in each receiver.')) return;
+    try {
+      app.project = (await api('POST', '/api/project/base-password')) as unknown as ProjectInfo;
+      app.showBasePassword = true;
+      renderBases();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  }
+});
+
+// ------------------------------------------------------------------ export / import logins between projects
+function safeFileName(s: string) {
+  return s.replace(/[^A-Za-z0-9 _.-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'project';
+}
+
+$('#exportLogins').addEventListener('click', async () => {
+  try {
+    const data = (await api('GET', '/api/devices/export')) as unknown as LoginExport;
+    if (!data.logins.length) {
+      alert('This project has no logins to export yet.');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `ntrip-logins-${safeFileName(app.project?.name || projectId())}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (err) {
+    alert(`Could not export: ${(err as Error).message}`);
+  }
+});
+
+$('#importLogins').addEventListener('click', () => $<HTMLInputElement>('#importFile').click());
+$<HTMLInputElement>('#importFile').addEventListener('change', async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text()) as LoginExport;
+    if (data?.format !== 'connect-ntrip-logins' || !Array.isArray(data.logins)) throw new Error('This is not a logins file exported from Connect-NTRIP');
+    app.pendingImport = data;
+  } catch (err) {
+    app.pendingImport = null;
+    alert((err as Error).message.startsWith('This is') ? (err as Error).message : 'Could not read that file');
+  }
+  renderImport();
+});
+
+function renderImport() {
+  const el = $('#importPreview');
+  const data = app.pendingImport;
+  el.classList.toggle('hidden', !data);
+  if (!data) {
+    el.innerHTML = '';
+    return;
+  }
+  const here = new Set(app.devices.map((d) => d.serial.toUpperCase()));
+  const clash = data.logins.filter((l) => here.has(String(l.serial).toUpperCase()));
+  el.innerHTML = `
+    <h3>Import logins</h3>
+    <p class="card-sub">${data.logins.length} login(s) from <b>${esc(data.fromProject)}</b>, exported ${esc(when(Date.parse(data.exportedAt)))}.
+      Passwords come across unchanged, so machines keep their existing password.</p>
+    <ul class="import-list">${data.logins
+      .map((l) => `<li>${esc(l.label || l.serial)} <span class="hint">${esc(l.serial)}${l.profile?.companyName ? ` · ${esc(l.profile.companyName)}` : ''}${here.has(String(l.serial).toUpperCase()) ? ' · already in this project' : ''}</span></li>`)
+      .join('')}</ul>
+    ${clash.length ? `<label class="inline"><input type="checkbox" id="importReplace"> Replace the ${clash.length} login(s) already in this project</label>` : ''}
+    <p class="card-sub">Allowed mountpoints are not copied: imported logins can use every base in this project until you limit them.</p>
+    <div class="form-actions">
+      <button type="button" class="primary-btn" id="importGo">Import</button>
+      <button type="button" class="ghost-btn" id="importCancel">Cancel</button>
+    </div>
+    <p class="form-msg" id="importMsg"></p>`;
+}
+
+$('#importPreview').addEventListener('click', async (e) => {
+  const t = e.target as HTMLElement;
+  if (t.id === 'importCancel') {
+    app.pendingImport = null;
+    renderImport();
+  } else if (t.id === 'importGo' && app.pendingImport) {
+    const replace = !!document.querySelector<HTMLInputElement>('#importReplace')?.checked;
+    (t as HTMLButtonElement).disabled = true;
+    try {
+      const r = (await api('POST', '/api/devices/import', { logins: app.pendingImport.logins, replace })) as unknown as { added: number; replaced: number; skipped: number; errors: string[] };
+      app.pendingImport = null;
+      renderImport();
+      formMsg(`Imported: ${r.added} added${r.replaced ? `, ${r.replaced} replaced` : ''}${r.skipped ? `, ${r.skipped} already here (kept)` : ''}${r.errors.length ? `. ${r.errors.length} could not be imported: ${r.errors.slice(0, 3).join('; ')}` : ''}`, !r.errors.length);
+    } catch (err) {
+      $('#importMsg').textContent = (err as Error).message;
+      (t as HTMLButtonElement).disabled = false;
+    }
+  }
 });
 
 // Mountpoints a base named itself can be removed once that base has stopped sending to them

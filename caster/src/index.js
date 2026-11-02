@@ -1,29 +1,30 @@
 import { loadConfig } from './config.js';
-import { DeviceStore } from './devices.js';
 import { CasterState } from './state.js';
 import { startNtripServer } from './ntrip.js';
 import { startDashboard } from './dashboard.js';
 import { Tokens, loadSecret, startWebUiProxy } from './webui.js';
-import { History } from './history.js';
 import { ManualPositions } from './positions.js';
 import { ReceiverStore } from './receivers.js';
+import { Projects } from './projects.js';
 
 const config = loadConfig();
-const devices = new DeviceStore(config.dataDir);
 const state = new CasterState(config);
-const history = new History(config.dataDir, config.historyDays);
-state.history = history;
 state.positions = new ManualPositions(config.dataDir);
+// Projects first: the receiver store and the NTRIP server look up which project things belong to
+const projects = new Projects(config);
+config.projects = projects;
+state.projects = projects;
 const receiverStore = new ReceiverStore(config);
+config.receiverStore = receiverStore;
 
-console.log(`${config.casterName}: ${config.mountpoints.length} mountpoint(s), ${devices.list().length} device(s)`);
+console.log(`${config.casterName}: ${config.mountpoints.length} mountpoint(s), ${projects.list().length} project(s)`);
 if (!config.adminEmails.length && !config.dashboardToken) {
   console.warn('No adminEmails or dashboardToken configured: nobody will be able to open the dashboard.');
 }
 
 const tokens = new Tokens(loadSecret(config));
-const ntrip = startNtripServer({ config, state, devices });
-const dash = startDashboard({ config, state, devices, tokens, history, receiverStore });
+const ntrip = startNtripServer({ config, state });
+const dash = startDashboard({ config, state, tokens, receiverStore });
 const webui = startWebUiProxy({ config, state, tokens, receiverStore });
 
 function shutdown() {

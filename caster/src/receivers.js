@@ -34,8 +34,27 @@ export class ReceiverStore extends EventEmitter {
 
   get(id) { return this.config.receivers.find(r => r.id === id) || null; }
 
+  /** Receivers saved before projects existed move to the first project that opens the extension. */
+  adopt(projectId) {
+    let changed = false;
+    for (const r of this.saved) if (!r.project) { r.project = projectId; changed = true; }
+    if (changed) this.save();
+  }
+
+  /** Receivers belonging to a project. */
+  forProject(projectId) {
+    return this.config.receivers.filter(r => this.config.projects.projectOf(r) === projectId);
+  }
+
+  /** The receiver if it belongs to this project, otherwise a "not found" error. */
+  own(id, projectId) {
+    const r = this.get(id);
+    if (!r || this.config.projects.projectOf(r) !== projectId) throw new UserError('Receiver not found', 404);
+    return r;
+  }
+
   /** Checks and tidies what the extension sent. `existing` is the receiver being edited. */
-  clean(body, existing) {
+  clean(body, existing, projectId) {
     const out = {};
     const has = k => body[k] !== undefined;
     if (!existing || has('name')) {
@@ -53,7 +72,8 @@ export class ReceiverStore extends EventEmitter {
       out.webUrl = `${u.protocol}//${u.host}`;
     }
     if (has('mountpoints')) {
-      const known = new Set(this.config.mountpoints.map(m => m.name));
+      // Only this project's mountpoints can be linked
+      const known = new Set(this.config.mountpoints.filter(m => this.config.projects.projectOf(m) === projectId).map(m => m.name));
       out.mountpoints = (Array.isArray(body.mountpoints) ? body.mountpoints : []).map(String).filter(n => known.has(n));
     }
     if (has('username')) out.username = String(body.username ?? '').trim().slice(0, 64);
@@ -62,9 +82,9 @@ export class ReceiverStore extends EventEmitter {
     return out;
   }
 
-  add(body) {
+  add(body, projectId) {
     if (!this.config.webUi?.domain) throw new UserError('The server has no webUi.domain set, so it cannot serve receiver web pages yet');
-    const r = { mountpoints: [], model: '', username: '', password: '', ...this.clean(body, null) };
+    const r = { mountpoints: [], model: '', username: '', password: '', ...this.clean(body, null, projectId), project: projectId };
     let base = r.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'base';
     if (!ID_RE.test(base)) base = 'base';
     let id = base;
@@ -76,18 +96,20 @@ export class ReceiverStore extends EventEmitter {
     return this.get(id);
   }
 
-  update(id, body) {
+  update(id, body, projectId) {
+    this.own(id, projectId);
     const r = this.saved.find(x => x.id === id);
     if (!r) {
       if (this.get(id)) throw new UserError('This receiver is set in the server config file, so it can only be changed there');
       throw new UserError('Receiver not found', 404);
     }
-    Object.assign(r, this.clean(body, r), { updated: new Date().toISOString() });
+    Object.assign(r, this.clean(body, r, projectId), { updated: new Date().toISOString() });
     this.save();
     return this.get(id);
   }
 
-  remove(id) {
+  remove(id, projectId) {
+    this.own(id, projectId);
     const i = this.saved.findIndex(x => x.id === id);
     if (i < 0) {
       if (this.get(id)) throw new UserError('This receiver is set in the server config file, so it can only be removed there');

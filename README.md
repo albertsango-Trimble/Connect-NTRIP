@@ -55,11 +55,21 @@ Logs: `journalctl -u connect-ntrip -f`. To update the caster to the latest versi
 
  Rover logins live in `/var/lib/connect-ntrip/devices.json` (hashed).
 
+## Projects
+
+Everything in the extension belongs to the Trimble Connect project it is opened in: bases (mountpoints), base receivers, rover logins, online history and the log. A new project starts empty.
+
+- **Each project has its own base password.** Open the extension in the project, go to **Bases → Connect a base to this project**, and enter the caster address, port and that password in the base receiver. Whatever mountpoint name the base uses ends up in that project. **Change password…** gives the project a new one (bases using the old one are refused until updated).
+- **Rovers sign in against the logins of the base's project.** A machine working on two projects needs a login in each.
+- **Copy logins between projects** with **Logins → Export** (downloads a file) and **Logins → Import** in the other project. Passwords travel hashed, so machines keep their existing password; logins already in the project are kept unless you tick *Replace*. Allowed-mountpoint limits are not copied.
+- **Upgrading from before projects:** the first project to open the extension takes over the existing bases, logins, history and receivers, and keeps the `autoMountpoints.sourcePassword` from the config, so those bases carry on without changes. Open the extension in the right project first.
+- Access is checked with Trimble Connect: you must be in `adminEmails` and be able to open the project.
+
 ## 2. Point the Trimble base at the caster
 
 ### Let the base name its own mountpoints (simplest)
 
-With `autoMountpoints` on (it is in the example config), you don't need to set up mountpoints on the caster at all. In the receiver's NTRIP output, type **any mountpoint name you like** and use the shared `autoMountpoints.sourcePassword`. The caster creates the mountpoint when the base connects, and works out the format from the data: RTCM 3, CMR+ or CMRx. The base's position comes from the base's own data: RTCM 1005/1006, or CMR message Type 1 (reference station coordinates, decoded per Trimble's CMR specification). Streams without either, such as CMRx, take it from another stream the same base is sending. NTRIP 2 bases that send an `Ntrip-STR` header can also supply it.
+With `autoMountpoints` on (it is in the example config), you don't need to set up mountpoints on the caster at all. In the receiver's NTRIP output, type **any mountpoint name you like** and use the project's base password shown in **Bases → Connect a base to this project** (see Projects above). The caster creates the mountpoint when the base connects, and works out the format from the data: RTCM 3, CMR+ or CMRx. The base's position comes from the base's own data: RTCM 1005/1006, or CMR message Type 1 (reference station coordinates, decoded per Trimble's CMR specification). Streams without either, such as CMRx, take it from another stream the same base is sending. NTRIP 2 bases that send an `Ntrip-STR` header can also supply it.
 
 **Bases with no position in their data** (for example CMRx only): in the Bases tab click **Set position**, then click the base's spot on the map, drag the pin, or type its latitude/longitude (or easting/northing in the Connect project's coordinate system). You can apply the same position to the base's other mountpoints in one go. A position set by hand is used whenever the base's own data doesn't give one; RTCM 1005/1006, CMR Type 1 or another stream from the same base still take priority while it is sending.
 

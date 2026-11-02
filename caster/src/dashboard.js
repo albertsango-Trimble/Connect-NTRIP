@@ -1,7 +1,9 @@
 // HTTPS-facing (via reverse proxy) API + WebSocket feed for the Trimble Connect extension.
 //
-// Auth: the extension sends its Trimble Connect access token. The caster checks it against
-// the Trimble Connect API (/users/me) and allows the email if it's in config.adminEmails.
+// Auth: the extension sends its Trimble Connect access token and the Connect project it is open in.
+// The caster checks the token against the Trimble Connect API (/users/me), allows the email if it's in
+// config.adminEmails, and checks the user can open that project. Everything the extension sees and changes
+// (bases, machines, logins, receivers, history, log) is limited to that project.
 // A static dashboardToken can also be set for local development.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -10,26 +12,28 @@ import { UserError, normaliseSerial } from './devices.js';
 import { isReceiverHost, startLink } from './webui.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
+const EXPORT_FORMAT = 'connect-ntrip-logins';
 
-export function startDashboard({ config, state, devices, tokens, history, receiverStore }) {
+export function startDashboard({ config, state, tokens, receiverStore }) {
+  const projects = config.projects;
   const authCache = new Map(); // sha256(token) -> { user, expires }
+  const projectCache = new Map(); // sha256(token + project) -> expires
+
+  const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 
   async function authenticate(token) {
     if (!token) return null;
     if (config.dashboardToken && safeEqual(token, config.dashboardToken)) {
-      return { email: 'dashboard-token', name: 'Dashboard token' };
+      return { email: 'dashboard-token', name: 'Dashboard token', dev: true };
     }
-    const key = crypto.createHash('sha256').update(token).digest('hex');
+    const key = hash(token);
     const cached = authCache.get(key);
     if (cached && cached.expires > Date.now()) return cached.user;
 
     let user = null;
     for (const base of config.tcApiHosts) {
       try {
-        const res = await fetch(`${base}/users/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: AbortSignal.timeout(5000),
-        });
+        const res = await fetch(`${base}/users/me`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
         if (res.ok) {
           const me = await res.json();
           const email = String(me.email || '').toLowerCase();
@@ -48,13 +52,52 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
     return user;
   }
 
+  /** True when this user can open the Connect project (checked with Connect, using their own token). */
+  async function canOpenProject(token, user, projectId) {
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(projectId || '')) return false;
+    if (user.dev) return true;
+    const key = hash(`${token}|${projectId}`);
+    if ((projectCache.get(key) || 0) > Date.now()) return true;
+    for (const base of config.tcApiHosts) {
+      try {
+        const res = await fetch(`${base}/projects/${encodeURIComponent(projectId)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          projectCache.set(key, Date.now() + AUTH_CACHE_MS);
+          return true;
+        }
+      } catch {
+        /* try the next region */
+      }
+    }
+    return false;
+  }
+
+  /** Signs in and opens the project; throws a 401/403 error when not allowed. */
+  async function access(token, projectId, projectName) {
+    const user = await authenticate(token);
+    if (!user) throw new UserError('Not authorised', 401);
+    if (!projectId) throw new UserError('Open the extension inside a Trimble Connect project', 400);
+    if (!(await canOpenProject(token, user, projectId))) throw new UserError('You do not have access to this project', 403);
+    const { project, claimedLegacy } = projects.open(projectId, projectName);
+    if (claimedLegacy) state.event('project.took_over_existing', { project: projectId, by: user.email });
+    return { user, project };
+  }
+
+  function projectInfo(p) {
+    return {
+      id: p.id,
+      name: p.name,
+      baseConnection: { host: config.publicHost || null, port: config.ntripPort, password: p.sourcePassword },
+    };
+  }
+
   function cors(req, res) {
     const origin = req.headers.origin;
     if (origin && config.allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Connect-Project, X-Connect-Project-Name');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     }
   }
 
@@ -63,12 +106,12 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
     res.end(JSON.stringify(body));
   }
 
-  async function readJson(req) {
+  async function readJson(req, limit = 64 * 1024) {
     let size = 0;
     const chunks = [];
     for await (const c of req) {
       size += c.length;
-      if (size > 64 * 1024) throw new UserError('Body too large', 413);
+      if (size > limit) throw new UserError('Body too large', 413);
       chunks.push(c);
     }
     if (!chunks.length) return {};
@@ -95,15 +138,59 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
       if (parts[0] !== 'api') return send(res, 404, { error: 'Not found' });
 
       const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-      const user = await authenticate(token);
-      if (!user) return send(res, 401, { error: 'Not authorised' });
+      const projectId = String(req.headers['x-connect-project'] || url.searchParams.get('project') || '');
+      let projectName = '';
+      try { projectName = decodeURIComponent(String(req.headers['x-connect-project-name'] || '')); } catch { /* ignore */ }
+      const { user, project } = await access(token, projectId, projectName);
+      const P = project.id;
+      const devices = projects.devicesFor(P);
+      const history = projects.historyFor(P);
+      const ownMount = name => {
+        const m = config.mountpoints.find(x => x.name === name);
+        return m && projects.projectOf(m) === P ? m : null;
+      };
+      const pushDevices = () => broadcast({ type: 'devices', devices: devices.list() }, P);
 
-      // GET /api/snapshot
-      if (req.method === 'GET' && url.pathname === '/api/snapshot') return send(res, 200, state.snapshot());
+      // GET /api/project   POST /api/project/base-password (new base password for this project)
+      if (req.method === 'GET' && url.pathname === '/api/project') return send(res, 200, projectInfo(project));
+      if (req.method === 'POST' && url.pathname === '/api/project/base-password') {
+        projects.newPassword(P);
+        state.event('project.base_password_changed', { project: P, by: user.email });
+        const info = projectInfo(projects.get(P));
+        broadcast({ type: 'project', project: info }, P);
+        return send(res, 200, info);
+      }
 
-      // GET /api/mountpoints
-      if (req.method === 'GET' && url.pathname === '/api/mountpoints') {
-        return send(res, 200, config.mountpoints.map(m => state.sourceView(m)));
+      // GET /api/snapshot   GET /api/mountpoints
+      if (req.method === 'GET' && url.pathname === '/api/snapshot') return send(res, 200, state.snapshot(P));
+      if (req.method === 'GET' && url.pathname === '/api/mountpoints') return send(res, 200, state.mountpointViews(P));
+
+      // GET /api/devices/export  -> this project's logins for importing into another project
+      if (req.method === 'GET' && url.pathname === '/api/devices/export') {
+        state.event('devices.exported', { project: P, by: user.email, count: Object.keys(devices.devices).length });
+        return send(res, 200, { format: EXPORT_FORMAT, version: 1, exportedAt: new Date().toISOString(), fromProject: project.name || P, logins: devices.exportAll() });
+      }
+
+      // POST /api/devices/import {logins: [...], replace: bool}
+      if (req.method === 'POST' && url.pathname === '/api/devices/import') {
+        const body = await readJson(req, 2 * 1024 * 1024);
+        const list = Array.isArray(body.logins) ? body.logins : [];
+        if (!list.length) throw new UserError('No logins to import');
+        const result = { added: 0, replaced: 0, skipped: 0, errors: [] };
+        for (const rec of list) {
+          try { result[devices.importOne(rec, !!body.replace)]++; } catch (err) { result.errors.push(err.message); }
+        }
+        devices.save();
+        // A replaced login may have a different password: end live sessions so they sign in again
+        if (body.replace) {
+          const serials = new Set(list.map(r => normaliseSerial(r?.serial)));
+          for (const c of state.clients.values()) {
+            if (c.project === P && serials.has(c.serial)) { c.endReason = `login replaced by import (${user.email})`; c.close(); }
+          }
+        }
+        state.event('devices.imported', { project: P, by: user.email, added: result.added, replaced: result.replaced, skipped: result.skipped });
+        pushDevices();
+        return send(res, 200, result);
       }
 
       // GET /api/devices/:serial/history?days=30  (days=0 for everything kept)
@@ -113,7 +200,7 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
         if (!device) return send(res, 404, { error: `Device ${serial} not found` });
         const days = Math.max(0, Number(url.searchParams.get('days') ?? 30));
         const fromMs = days ? Date.now() - days * 86_400_000 : 0;
-        const live = [...state.clients.values()].filter(c => c.serial === serial).map(c => state.clientView(c, false));
+        const live = state.roverViews(P).filter(c => c.serial === serial);
         return send(res, 200, { device, days, keepDays: config.historyDays, live, records: history.read(serial, { fromMs }) });
       }
 
@@ -123,39 +210,37 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
         if (req.method === 'GET' && !serial) return send(res, 200, devices.list());
         if (req.method === 'POST' && !serial) {
           const d = devices.add(await readJson(req));
-          state.event('device.added', { serial: d.serial, by: user.email });
-          broadcast({ type: 'devices', devices: devices.list() });
+          state.event('device.added', { project: P, serial: d.serial, by: user.email });
+          pushDevices();
           return send(res, 201, d);
         }
         if (req.method === 'PATCH' && serial) {
           const body = await readJson(req);
           const d = devices.update(serial, body);
-          state.event('device.updated', { serial, by: user.email, fields: Object.keys(body).filter(k => k !== 'password').concat(body.password ? ['password'] : []) });
-          // Kick live sessions if the device was disabled or its password changed
+          state.event('device.updated', { project: P, serial, by: user.email, fields: Object.keys(body).filter(k => k !== 'password').concat(body.password ? ['password'] : []) });
           // Only drop a live connection when it is no longer allowed: login disabled, password changed,
           // or its mountpoint taken off the list. Editing names and contact details leaves it connected.
           for (const c of state.clients.values()) {
-            if (c.serial !== serial) continue;
+            if (c.project !== P || c.serial !== serial) continue;
             let why = null;
             if (!d.enabled) why = `login disabled by ${user.email}`;
             else if (body.password) why = `password changed by ${user.email}`;
             else if (d.mountpoints.length && !d.mountpoints.includes(c.mount)) why = `${c.mount} removed from the login by ${user.email}`;
             if (why) { c.endReason = why; c.close(); }
+            else if (body.label !== undefined) c.label = d.label; // keep live machine names in step with the login
           }
-          // Keep live machine names in step with the login
-          if (body.label !== undefined) for (const c of state.clients.values()) if (c.serial === serial) c.label = d.label;
-          broadcast({ type: 'devices', devices: devices.list() });
+          pushDevices();
           return send(res, 200, d);
         }
         if (req.method === 'DELETE' && serial) {
           devices.remove(serial);
           for (const c of state.clients.values()) {
-            if (c.serial !== serial) continue;
+            if (c.project !== P || c.serial !== serial) continue;
             c.endReason = `login deleted by ${user.email}`;
             c.close();
           }
-          state.event('device.removed', { serial, by: user.email });
-          broadcast({ type: 'devices', devices: devices.list() });
+          state.event('device.removed', { project: P, serial, by: user.email });
+          pushDevices();
           return send(res, 200, { ok: true });
         }
       }
@@ -163,28 +248,28 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
       // PUT /api/mountpoints/:name/position {lat, lon, h?}   DELETE /api/mountpoints/:name/position
       if (parts[1] === 'mountpoints' && parts[2] && parts[3] === 'position' && (req.method === 'PUT' || req.method === 'DELETE')) {
         const name = decodeURIComponent(parts[2]);
-        const m = config.mountpoints.find(x => x.name === name);
+        const m = ownMount(name);
         if (!m) return send(res, 404, { error: `Mountpoint ${name} not found` });
         if (req.method === 'DELETE') {
           state.positions.clear(name);
-          state.event('mountpoint.position_cleared', { mount: name, by: user.email });
+          state.event('mountpoint.position_cleared', { project: P, mount: name, by: user.email });
         } else {
           const p = state.positions.set(name, await readJson(req), user.email);
-          state.event('mountpoint.position_set', { mount: name, by: user.email, lat: p.lat, lon: p.lon });
+          state.event('mountpoint.position_set', { project: P, mount: name, by: user.email, lat: p.lat, lon: p.lon });
         }
-        broadcast({ type: 'mountpoints', mountpoints: config.mountpoints.map(x => state.sourceView(x)) });
+        broadcast({ type: 'mountpoints', mountpoints: state.mountpointViews(P) }, P);
         return send(res, 200, state.sourceView(m));
       }
 
       // DELETE /api/mountpoints/:name  (only mountpoints a base created, and only while it is offline)
       if (req.method === 'DELETE' && parts[1] === 'mountpoints' && parts[2]) {
         const name = decodeURIComponent(parts[2]);
-        const m = config.mountpoints.find(x => x.name === name);
+        const m = ownMount(name);
         if (!m) return send(res, 404, { error: `Mountpoint ${name} not found` });
         if (!m.auto) return send(res, 400, { error: 'Configured mountpoints are changed in the caster config file' });
         if (state.sources.has(name)) return send(res, 409, { error: 'The base is still sending to this mountpoint' });
         config.autoMounts.remove(name);
-        state.event('mountpoint.removed', { mount: name, by: user.email });
+        state.event('mountpoint.removed', { project: P, mount: name, by: user.email });
         return send(res, 200, { ok: true });
       }
 
@@ -193,34 +278,34 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
         const id = parts[2] ? decodeURIComponent(parts[2]) : null;
         let r;
         if (req.method === 'POST' && !id) {
-          r = receiverStore.add(await readJson(req));
-          state.event('receiver.added', { receiver: r.id, name: r.name, by: user.email });
+          r = receiverStore.add(await readJson(req), P);
+          state.event('receiver.added', { project: P, receiver: r.id, name: r.name, by: user.email });
         } else if (req.method === 'PATCH' && id) {
-          r = receiverStore.update(id, await readJson(req));
-          state.event('receiver.updated', { receiver: id, by: user.email });
+          r = receiverStore.update(id, await readJson(req), P);
+          state.event('receiver.updated', { project: P, receiver: id, by: user.email });
         } else if (req.method === 'DELETE' && id) {
-          receiverStore.remove(id);
+          receiverStore.remove(id, P);
           state.receiverStatus.delete(id);
-          state.event('receiver.removed', { receiver: id, by: user.email });
+          state.event('receiver.removed', { project: P, receiver: id, by: user.email });
         } else {
           return send(res, 404, { error: 'Not found' });
         }
-        broadcast({ type: 'receivers', receivers: state.receiverViews() });
-        return send(res, 200, r ? state.receiverViews().find(x => x.id === r.id) : { ok: true });
+        broadcast({ type: 'receivers', receivers: state.receiverViews(P) }, P);
+        return send(res, 200, r ? state.receiverViews(P).find(x => x.id === r.id) : { ok: true });
       }
 
       // POST /api/receivers/:id/webui -> one-time link to the receiver's own web interface
       if (req.method === 'POST' && parts[1] === 'receivers' && parts[3] === 'webui') {
-        const r = config.receivers.find(x => x.id === parts[2]);
-        if (!r || !r.webUrl) return send(res, 404, { error: 'This receiver has no web UI configured' });
+        const r = receiverStore.own(decodeURIComponent(parts[2]), P);
+        if (!r.webUrl) return send(res, 404, { error: 'This receiver has no web UI configured' });
         return send(res, 200, { url: startLink(config, tokens, r, user.email), expiresInSec: 60 });
       }
 
       // POST /api/rovers/:id/disconnect
       if (req.method === 'POST' && parts[1] === 'rovers' && parts[3] === 'disconnect') {
         const c = state.clients.get(parts[2]);
-        if (!c) return send(res, 404, { error: 'Rover not connected' });
-        state.event('rover.kicked', { serial: c.serial, by: user.email });
+        if (!c || c.project !== P) return send(res, 404, { error: 'Rover not connected' });
+        state.event('rover.kicked', { project: P, serial: c.serial, by: user.email });
         c.endReason = `disconnected by ${user.email}`;
         c.close();
         return send(res, 200, { ok: true });
@@ -228,13 +313,13 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
 
       return send(res, 404, { error: 'Not found' });
     } catch (err) {
-      if (err instanceof UserError || (err.status && err.status < 500)) return send(res, err.status, { error: err.message });
+      if (err instanceof UserError || (err.status && err.status < 500)) return send(res, err.status || 400, { error: err.message });
       console.error(err);
       return send(res, 500, { error: 'Server error' });
     }
   });
 
-  // ---------------------------------------------------------------- WebSocket feed
+  // ---------------------------------------------------------------- WebSocket feed (one project per socket)
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
   const authed = new Set();
 
@@ -250,42 +335,54 @@ export function startDashboard({ config, state, devices, tokens, history, receiv
     ws.on('message', async raw => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (msg.type === 'auth' && !authed.has(ws)) {
-        const user = await authenticate(msg.token);
+      if (msg.type !== 'auth' || authed.has(ws)) return;
+      let granted;
+      try {
+        granted = await access(msg.token, String(msg.project || ''), String(msg.projectName || ''));
+      } catch (err) {
         clearTimeout(authTimer);
-        if (!user) { ws.close(4001, 'Not authorised'); return; }
-        authed.add(ws);
-        ws.send(JSON.stringify({ type: 'hello', user, snapshot: state.snapshot(), devices: devices.list() }));
+        ws.close(err.status === 403 ? 4003 : 4001, err.message.slice(0, 100));
+        return;
       }
+      clearTimeout(authTimer);
+      ws.project = granted.project.id;
+      authed.add(ws);
+      ws.send(JSON.stringify({
+        type: 'hello', user: granted.user, project: projectInfo(granted.project),
+        snapshot: state.snapshot(ws.project), devices: projects.devicesFor(ws.project).list(),
+      }));
     });
     ws.on('close', () => { clearTimeout(authTimer); authed.delete(ws); });
   });
 
-  function broadcast(msg) {
+  function broadcast(msg, project) {
     const data = JSON.stringify(msg);
-    for (const ws of authed) if (ws.readyState === ws.OPEN) ws.send(data);
+    for (const ws of authed) if (ws.project === project && ws.readyState === ws.OPEN) ws.send(data);
   }
 
-  // Push discrete events immediately; positions and rates once a second.
-  state.on('event', ev => broadcast({ type: 'event', event: ev }));
+  // Push discrete events immediately (only to their own project); positions and rates once a second.
+  state.on('event', ev => { if (ev.project) broadcast({ type: 'event', event: ev }, ev.project); });
   const dirty = new Set();
   state.on('position', c => dirty.add(c.id));
   state.on('tick', () => {
     if (!authed.size) { dirty.clear(); return; }
-    const positions = [];
-    for (const id of dirty) {
-      const c = state.clients.get(id);
-      if (c?.gga) positions.push({ id, gga: c.gga, ggaAt: c.ggaAt, point: c.track[c.track.length - 1] || null });
+    const open = new Set([...authed].map(ws => ws.project));
+    for (const P of open) {
+      const positions = [];
+      for (const id of dirty) {
+        const c = state.clients.get(id);
+        if (c?.project === P && c.gga) positions.push({ id, gga: c.gga, ggaAt: c.ggaAt, point: c.track[c.track.length - 1] || null });
+      }
+      broadcast({
+        type: 'tick',
+        serverTime: Date.now(),
+        positions,
+        mountpoints: state.mountpointViews(P),
+        rovers: state.roverViews(P),
+        receivers: state.receiverViews(P),
+      }, P);
     }
     dirty.clear();
-    broadcast({
-      type: 'tick',
-      serverTime: Date.now(),
-      positions,
-      mountpoints: config.mountpoints.map(m => state.sourceView(m)),
-      rovers: [...state.clients.values()].map(c => state.clientView(c, false)),
-      receivers: state.receiverViews(),
-    });
   });
 
   // Drop dead dashboard sockets

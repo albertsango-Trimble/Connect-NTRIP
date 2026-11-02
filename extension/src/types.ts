@@ -159,8 +159,33 @@ export interface Snapshot {
   log: LogEvent[];
 }
 
+/** The Connect project this extension is open in, and how its bases connect to the caster. */
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  baseConnection: { host: string | null; port: number; password: string };
+}
+
+/** A login as exported from one project for importing into another (the password stays hashed). */
+export interface ExportedLogin {
+  serial: string;
+  label?: string;
+  enabled?: boolean;
+  profile?: Record<string, string>;
+  passwordHash: string;
+}
+
+export interface LoginExport {
+  format: 'connect-ntrip-logins';
+  version: number;
+  exportedAt: string;
+  fromProject: string;
+  logins: ExportedLogin[];
+}
+
 export type CasterMessage =
-  | { type: 'hello'; user: { email: string; name: string }; snapshot: Snapshot; devices: Device[] }
+  | { type: 'hello'; user: { email: string; name: string }; project: ProjectInfo; snapshot: Snapshot; devices: Device[] }
+  | { type: 'project'; project: ProjectInfo }
   | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[]; receivers?: Receiver[] }
   | { type: 'event'; event: LogEvent }
   | { type: 'devices'; devices: Device[] }

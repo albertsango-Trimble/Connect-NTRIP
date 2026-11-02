@@ -115,6 +115,36 @@ export class DeviceStore {
     return this.get(serial);
   }
 
+  /** Logins for copying to another project: details and the hashed password (never the password itself). */
+  exportAll() {
+    return Object.entries(this.devices).map(([serial, d]) => ({
+      serial, label: d.label, enabled: d.enabled, profile: { ...emptyProfile(), ...(d.profile || {}) }, passwordHash: d.hash,
+    }));
+  }
+
+  /**
+   * Adds one login from an export. Existing serials are left alone unless `replace` is set.
+   * Allowed mountpoints aren't copied: mountpoints belong to the project they came from.
+   */
+  importOne(rec, replace) {
+    const serial = normaliseSerial(rec?.serial);
+    if (!validateSerial(serial)) throw new UserError(`${rec?.serial || '(blank)'}: not a valid serial number`);
+    if (!/^scrypt\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/.test(String(rec.passwordHash || ''))) throw new UserError(`${serial}: password missing from the file`);
+    const exists = !!this.devices[serial];
+    if (exists && !replace) return 'skipped';
+    const now = new Date().toISOString();
+    this.devices[serial] = {
+      hash: rec.passwordHash,
+      label: String(rec.label || '').slice(0, 80),
+      mountpoints: [],
+      enabled: rec.enabled !== false,
+      profile: cleanProfile(rec.profile),
+      created: exists ? this.devices[serial].created : now,
+      updated: now,
+    };
+    return exists ? 'replaced' : 'added';
+  }
+
   remove(serial) {
     serial = normaliseSerial(serial);
     if (!this.devices[serial]) throw new UserError(`Device ${serial} not found`, 404);
