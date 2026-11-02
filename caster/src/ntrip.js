@@ -88,9 +88,13 @@ function route(sock, req, rest, ctx) {
   if (req.method === 'POST') return handleSourceV2(sock, req, rest, ctx);
   if (req.method === 'GET') {
     const mount = mountFromPath(req.a);
-    if (!mount) return sendSourcetable(sock, req, ctx);
+    if (!mount) {
+      console.log(`sourcetable request from ${req.addr} (${req.headers['user-agent'] || 'no user agent'}, ${req.v2 ? 'NTRIP 2' : 'NTRIP 1'})`);
+      return sendSourcetable(sock, req, ctx);
+    }
     return handleClient(sock, req, mount, rest, ctx);
   }
+  console.log(`unrecognised request from ${req.addr}: ${JSON.stringify(req.method + ' ' + req.a + ' ' + req.b).slice(0, 120)}`);
   sock.end(req.v2 ? httpStatus(405, 'Method Not Allowed') : 'HTTP/1.0 400 Bad Request\r\n\r\n');
 }
 
@@ -99,21 +103,44 @@ function httpStatus(code, text, extra = '') {
 }
 
 // ---------------------------------------------------------------- sourcetable
+/** Sourcetable fields are plain ASCII separated by ';' (NTRIP 1/2). */
+const ascii = v => String(v ?? '').normalize('NFKD').replace(/[^\x20-\x7E]/g, '').replace(/;/g, ',').trim();
+
+const MSM_NAV = [[1070, 'GPS'], [1080, 'GLO'], [1090, 'GAL'], [1100, 'SBAS'], [1110, 'QZS'], [1120, 'BDS'], [1130, 'IRS']];
+
+/** Format, format details and navigation systems for an STR line, from what the base is actually sending. */
+function streamInfo(m, state) {
+  const mon = state?.sources.get(m.name)?.monitor;
+  const types = mon ? mon.messageTypes() : [];
+  const detected = mon?.detected?.() || null;
+  const label = detected || (m.auto ? m.format : null) || m.format || '';
+  let format;
+  if (/^RTCM/i.test(label)) format = label.split('·')[0].trim();                 // "RTCM 3.3"
+  else if (/CMRx/i.test(label)) format = 'CMRx';
+  else if (/CMR\+|CMR\/CMR\+/i.test(label)) format = 'CMR+';
+  else if (/CMR/i.test(label)) format = 'CMR';
+  else format = m.auto ? 'unknown' : label;
+  const details = types.length ? types.filter(t => t < 4000).join(',') : (m.auto ? '' : m.formatDetails || '');
+  const nav = [...new Set(types.map(t => MSM_NAV.find(([b]) => t > b && t <= b + 7)?.[1]).filter(Boolean))];
+  return { format, details, nav: nav.length ? nav.join('+') : (m.navSystem || 'GPS') };
+}
+
 function buildSourcetable({ config, state }) {
   const host = config.publicHost || 'localhost';
   const lines = [];
   for (const m of config.mountpoints) {
     if (m.auto && !state?.sources.has(m.name)) continue; // a base's own mountpoint is listed while it is sending
     const pos = state?.position(m) || { lat: m.lat ?? 0, lon: m.lon ?? 0 };
+    const info = streamInfo(m, state);
     lines.push([
-      'STR', m.name, m.identifier || m.name, m.format, m.formatDetails || '', m.carrier ?? 2,
-      m.navSystem || 'GPS', m.network || config.casterName || 'Connect-NTRIP', m.country || config.country || '',
-      pos.lat.toFixed(2), pos.lon.toFixed(2), 1, 0, m.generator || 'Trimble', 'none', 'B', 'N',
+      'STR', m.name, m.identifier || m.name, info.format, info.details, m.carrier ?? 2,
+      info.nav, m.network || config.casterName || 'Connect-NTRIP', m.country || config.country || '',
+      Number(pos.lat).toFixed(2), Number(pos.lon).toFixed(2), 0, 0, m.generator || 'Trimble', 'none', 'B', 'N',
       m.bitrate || 9600, m.misc || '',
-    ].join(';'));
+    ].map((v, i) => (i === 1 ? v : ascii(v))).join(';'));
   }
   lines.push(['CAS', host, config.ntripPort, config.casterName || 'Connect-NTRIP', config.operator || '', 0,
-    config.country || '', '0.00', '0.00', '0.0.0.0', 0, ''].join(';'));
+    config.country || '', '0.00', '0.00', '0.0.0.0', 0, ''].map(ascii).join(';'));
   return lines.join('\r\n') + '\r\nENDSOURCETABLE\r\n';
 }
 
