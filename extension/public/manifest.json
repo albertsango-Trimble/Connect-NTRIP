@@ -1,7 +1,7 @@
 {
   "title": "NTRIP Caster",
+  "description": "Live map of the NTRIP caster: base stations, connected machines, fix status and rover logins",
+  "url": "https://albertsango-trimble.github.io/Connect-NTRIP/",
   "icon": "https://albertsango-trimble.github.io/Connect-NTRIP/icon.png",
-  "url": "https://albertsango-trimble.github.io/Connect-NTRIP/index.html",
-  "description": "Live map of the NTRIP caster: base stations, connected machines, fix status and rover logins.",
-  "enabled": true
+  "extensionType": ["project"]
 }
