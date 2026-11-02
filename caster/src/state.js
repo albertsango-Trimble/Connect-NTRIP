@@ -13,6 +13,7 @@ export class CasterState extends EventEmitter {
     this.log = [];
     this.nextId = 1;
     this.startedAt = Date.now();
+    this.tickCount = 0;
     this.receiverStatus = new Map(); // receiver id -> { reachable, httpStatus, error, checkedAt }
     this.ticker = setInterval(() => this.tick(), 1000);
     this.ticker.unref();
@@ -164,6 +165,10 @@ export class CasterState extends EventEmitter {
 
   // ---- periodic ----
   tick() {
+    // Base-named mountpoints: note their format and position every 10 s, even with no dashboard open
+    if (++this.tickCount % 10 === 0) {
+      for (const m of this.config.mountpoints) if (m.auto && this.sources.has(m.name)) this.sourceView(m);
+    }
     for (const s of this.sources.values()) {
       s.rateBps = s.bytesIn - s.lastBytes;
       s.lastBytes = s.bytesIn;
@@ -175,13 +180,42 @@ export class CasterState extends EventEmitter {
     this.emit('tick');
   }
 
+  /**
+   * A position for a stream that doesn't carry one (CMR+/CMRx): taken from another stream the same
+   * base is sending right now (same address), which usually carries RTCM 1005/1006.
+   */
+  sitePosition(src) {
+    const host = src.addr?.replace(/:\d+$/, '');
+    for (const other of this.sources.values()) {
+      if (other === src || other.addr?.replace(/:\d+$/, '') !== host) continue;
+      const st = other.monitor?.station;
+      if (st) return { lat: st.lat, lon: st.lon, h: st.h, from: `same base as ${other.mount}` };
+    }
+    return null;
+  }
+
   // ---- views for the dashboard ----
   sourceView(m) {
     const s = this.sources.get(m.name);
     const station = s?.monitor?.station;
+    const site = !station && s ? this.sitePosition(s) : null;
+    const detected = s?.monitor?.detected?.() || null;
+    if (m.auto) {
+      // Remember what was learned while the base is sending, so it is still known after it disconnects
+      let changed = false;
+      if (detected && m.format !== detected) { m.format = detected; changed = true; }
+      const live = station ? { lat: station.lat, lon: station.lon, h: station.h, from: 'RTCM 1005/1006' } : site;
+      if (live && (m.lat == null || Math.abs(m.lat - live.lat) > 1e-6 || Math.abs(m.lon - live.lon) > 1e-6 || m.positionFrom !== live.from)) {
+        m.lat = live.lat; m.lon = live.lon; m.h = live.h ?? null; m.positionFrom = live.from; changed = true;
+      }
+      if (changed) this.config.autoMounts?.save();
+    }
     return {
       name: m.name,
       identifier: m.identifier || '',
+      auto: !!m.auto,
+      detectedFormat: detected,
+      lastSeen: m.lastSeen || null,
       format: m.format,
       navSystem: m.navSystem || '',
       online: !!s,
@@ -194,7 +228,8 @@ export class CasterState extends EventEmitter {
       messageTypes: s?.monitor ? s.monitor.messageTypes() : [],
       position: station
         ? { lat: station.lat, lon: station.lon, h: station.h, stationId: station.stationId, antennaHeight: station.antennaHeight, from: 'RTCM 1005/1006' }
-        : (m.lat != null && m.lon != null ? { lat: m.lat, lon: m.lon, h: m.h ?? null, from: 'config' } : null),
+        : site ? { lat: site.lat, lon: site.lon, h: site.h ?? null, from: site.from }
+        : (m.lat != null && m.lon != null ? { lat: m.lat, lon: m.lon, h: m.h ?? null, from: m.auto ? `${m.positionFrom || 'last known'}` : 'config' } : null),
       rovers: [...this.clients.values()].filter(c => c.mount === m.name).length,
     };
   }

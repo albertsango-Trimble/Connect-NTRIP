@@ -36,6 +36,11 @@ export interface Rover {
 export interface Mountpoint {
   name: string;
   identifier: string;
+  /** Created by a base that named its own mountpoint */
+  auto?: boolean;
+  /** Format worked out from the data while the base is sending */
+  detectedFormat?: string | null;
+  lastSeen?: string | null;
   format: string;
   navSystem: string;
   online: boolean;

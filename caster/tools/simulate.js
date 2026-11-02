@@ -23,6 +23,9 @@ const v2 = !!args.v2;
 const baseLat = Number(args.lat ?? -37.8136);
 const baseLon = Number(args.lon ?? 144.9631);
 const rovers = String(args.rovers || '').split(',').filter(Boolean).map(s => s.split(':'));
+// --cmr 93|94|98 sends Trimble CMR-framed data (CMR+/CMRx) instead of RTCM
+const cmrType = args.cmr ? parseInt(String(args.cmr), 16) : null;
+const user = args.user || 'base';
 
 // ---------------------------------------------------------------- RTCM helpers
 class BitWriter {
@@ -68,6 +71,17 @@ function msg1005(lat, lon, h) {
   return frame(w.buf);
 }
 
+function cmrFrame(type) {
+  const len = 60;
+  const f = Buffer.alloc(len + 6);
+  f[0] = 0x02; f[1] = 0x00; f[2] = type; f[3] = len;
+  for (let i = 0; i < len; i++) f[4 + i] = (Math.random() * 256) | 0;
+  let sum = 0;
+  for (let i = 1; i < 4 + len; i++) sum = (sum + f[i]) & 0xff;
+  f[4 + len] = sum; f[5 + len] = 0x03;
+  return f;
+}
+
 function dummyMsm(type) {
   const p = Buffer.alloc(120);
   for (let i = 0; i < p.length; i++) p[i] = (Math.random() * 256) | 0;
@@ -97,7 +111,7 @@ function gga(lat, lon, quality, sats) {
 function startBase() {
   const sock = net.connect(port, host, () => {
     if (v2) {
-      const auth = Buffer.from(`base:${args['source-password']}`).toString('base64');
+      const auth = Buffer.from(`${user}:${args['source-password']}`).toString('base64');
       sock.write(`POST /${mount} HTTP/1.1\r\nHost: ${host}\r\nNtrip-Version: Ntrip/2.0\r\nAuthorization: Basic ${auth}\r\nUser-Agent: NTRIP SimBase/1.0\r\nTransfer-Encoding: chunked\r\n\r\n`);
     } else {
       sock.write(`SOURCE ${args['source-password']} /${mount}\r\nSource-Agent: NTRIP SimBase/1.0\r\n\r\n`);
@@ -107,8 +121,8 @@ function startBase() {
   sock.once('data', d => {
     console.log(`base: ${d.toString().split('\r\n')[0]}`);
     const timer = setInterval(() => {
-      const parts = [dummyMsm(1077), dummyMsm(1087), dummyMsm(1097)];
-      if (n++ % 5 === 0) parts.unshift(msg1005(baseLat, baseLon, 50));
+      const parts = cmrType ? [cmrFrame(cmrType), cmrFrame(cmrType)] : [dummyMsm(1077), dummyMsm(1087), dummyMsm(1097)];
+      if (!cmrType && n++ % 5 === 0) parts.unshift(msg1005(baseLat, baseLon, 50));
       const data = Buffer.concat(parts);
       sock.write(v2 ? encodeChunk(data) : data);
     }, 1000);

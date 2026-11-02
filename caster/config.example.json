@@ -27,6 +27,10 @@
     "domain": "bases.example.com",
     "port": 8081
   },
+  "autoMountpoints": {
+    "enabled": true,
+    "sourcePassword": "change-me-shared-base-password"
+  },
   "mountpoints": [
     {
       "name": "UPG_RTCM3",

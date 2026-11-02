@@ -7,7 +7,7 @@ import net from 'node:net';
 import { findMountpoint } from './config.js';
 import { normaliseSerial } from './devices.js';
 import { GgaScanner, parseGga } from './nmea.js';
-import { RtcmMonitor } from './rtcm.js';
+import { FormatMonitor } from './format.js';
 import { ChunkDecoder, encodeChunk } from './chunked.js';
 
 const MAX_HEADER = 8192;
@@ -99,10 +99,11 @@ function httpStatus(code, text, extra = '') {
 }
 
 // ---------------------------------------------------------------- sourcetable
-function buildSourcetable({ config }) {
+function buildSourcetable({ config, state }) {
   const host = config.publicHost || 'localhost';
   const lines = [];
   for (const m of config.mountpoints) {
+    if (m.auto && !state?.sources.has(m.name)) continue; // a base's own mountpoint is listed while it is sending
     lines.push([
       'STR', m.name, m.identifier || m.name, m.format, m.formatDetails || '', m.carrier ?? 2,
       m.navSystem || 'GPS', m.network || config.casterName || 'Connect-NTRIP', m.country || config.country || '',
@@ -129,9 +130,10 @@ function sendSourcetable(sock, req, ctx) {
 function handleSourceV1(sock, req, rest, ctx) {
   // "SOURCE <password> /<mount>"  (some firmware omits the slash)
   const mount = mountFromPath(req.b);
-  const m = findMountpoint(ctx.config, mount);
-  if (!m || req.a !== m.sourcePassword) {
-    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: m ? 'bad password' : 'unknown mountpoint' });
+  const m = sourceMountpoint(ctx.config, mount, req.a, req.headers['ntrip-str']);
+  if (!m) {
+    const known = findMountpoint(ctx.config, mount);
+    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
     sock.end('ERROR - Bad Password\r\n');
     return;
   }
@@ -141,21 +143,34 @@ function handleSourceV1(sock, req, rest, ctx) {
 
 function handleSourceV2(sock, req, rest, ctx) {
   const mount = mountFromPath(req.a);
-  const m = findMountpoint(ctx.config, mount);
   const auth = basicAuth(req.headers);
+  const m = sourceMountpoint(ctx.config, mount, auth?.pass, req.headers['ntrip-str']);
   if (!m) {
-    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: 'unknown mountpoint' });
-    sock.end(httpStatus(404, 'Not Found'));
-    return;
-  }
-  if (!auth || auth.pass !== m.sourcePassword) {
-    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: 'bad password' });
+    const known = findMountpoint(ctx.config, mount);
+    if (!known && !ctx.config.autoMounts.enabled) {
+      ctx.state.event('source.rejected', { mount, addr: req.addr, reason: 'unknown mountpoint' });
+      sock.end(httpStatus(404, 'Not Found'));
+      return;
+    }
+    ctx.state.event('source.rejected', { mount, addr: req.addr, reason: rejectReason(ctx.config, known) });
     sock.end(httpStatus(401, 'Unauthorized', `WWW-Authenticate: Basic realm="/${mount}"\r\n`));
     return;
   }
   sock.write(`HTTP/1.1 200 OK\r\nNtrip-Version: Ntrip/2.0\r\nServer: ${SERVER}\r\nDate: ${new Date().toUTCString()}\r\nConnection: close\r\n\r\n`);
   const chunked = /chunked/i.test(req.headers['transfer-encoding'] || '');
   attachSource(sock, req, m, 'NTRIP 2.0', rest, chunked ? new ChunkDecoder() : null, ctx);
+}
+
+/** The mountpoint a base may send to: a configured one with its own password, or one it names itself with the shared password. */
+function sourceMountpoint(config, name, password, strHeader) {
+  const m = findMountpoint(config, name);
+  if (m && !m.auto) return password === m.sourcePassword ? m : null;
+  return config.autoMounts.claim(name, password, strHeader);
+}
+
+function rejectReason(config, known) {
+  if (known && !known.auto) return 'bad password';
+  return config.autoMounts.enabled ? 'bad password' : 'unknown mountpoint';
 }
 
 function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) {
@@ -165,7 +180,7 @@ function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) 
     addr: req.addr,
     protocol,
     agent: req.headers['source-agent'] || req.headers['user-agent'] || '',
-    monitor: /rtcm/i.test(m.format) ? new RtcmMonitor() : null,
+    monitor: new FormatMonitor(),
     close: () => sock.destroy(),
   };
   state.addSource(src);
@@ -183,7 +198,10 @@ function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) 
     sock.destroy();
   });
   sock.on('data', onData);
-  sock.on('close', () => state.removeSource(src, 'closed'));
+  sock.on('close', () => {
+    if (m.auto) config.autoMounts.update(m, { format: src.monitor.detected(), station: src.monitor.station, fallback: state.sitePosition(src) });
+    state.removeSource(src, 'closed');
+  });
   if (rest.length) onData(rest);
   sock.resume();
 }
@@ -194,7 +212,7 @@ function handleClient(sock, req, mount, rest, { config, state, devices }) {
   if (!m) {
     // NTRIP 1 convention: unknown mountpoint gets the sourcetable
     if (req.v2) sock.end(httpStatus(404, 'Not Found'));
-    else sendSourcetable(sock, req, { config });
+    else sendSourcetable(sock, req, { config, state });
     return;
   }
 

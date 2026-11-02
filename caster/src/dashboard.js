@@ -160,6 +160,18 @@ export function startDashboard({ config, state, devices, tokens, history }) {
         }
       }
 
+      // DELETE /api/mountpoints/:name  (only mountpoints a base created, and only while it is offline)
+      if (req.method === 'DELETE' && parts[1] === 'mountpoints' && parts[2]) {
+        const name = decodeURIComponent(parts[2]);
+        const m = config.mountpoints.find(x => x.name === name);
+        if (!m) return send(res, 404, { error: `Mountpoint ${name} not found` });
+        if (!m.auto) return send(res, 400, { error: 'Configured mountpoints are changed in the caster config file' });
+        if (state.sources.has(name)) return send(res, 409, { error: 'The base is still sending to this mountpoint' });
+        config.autoMounts.remove(name);
+        state.event('mountpoint.removed', { mount: name, by: user.email });
+        return send(res, 200, { ok: true });
+      }
+
       // POST /api/receivers/:id/webui -> one-time link to the receiver's own web interface
       if (req.method === 'POST' && parts[1] === 'receivers' && parts[3] === 'webui') {
         const r = config.receivers.find(x => x.id === parts[2]);

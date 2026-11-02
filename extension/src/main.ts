@@ -47,6 +47,10 @@ function syncChildren(target: Node, source: Node) {
   while (target.childNodes.length > next.length) target.removeChild(target.lastChild!);
 }
 
+function when(ms: number) {
+  return new Date(ms).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 // ------------------------------------------------------------------ settings
@@ -520,10 +524,10 @@ function renderBases() {
         <span class="dot ${m.online ? 'online' : 'offline'}"></span>
         <div style="min-width:0"><div class="card-title">${esc(m.name)}</div>
           <div class="card-sub">${esc(m.identifier)}${m.navSystem ? ` · ${esc(m.navSystem)}` : ''}</div></div>
-        <div class="right"><span class="tag">${esc(m.format)}</span></div>
+        <div class="right">${m.auto ? '<span class="tag" title="Named by the base when it connected">Set by base</span>' : ''}<span class="tag">${esc(m.format)}</span></div>
       </div>
       <div class="grid">
-        <div><span>Status</span><b>${m.online ? 'Online' : 'Offline'}</b></div>
+        <div><span>Status</span><b>${m.online ? 'Online' : m.lastSeen ? `Last seen ${when(Date.parse(m.lastSeen))}` : 'Offline'}</b></div>
         <div><span>Data in</span><b>${m.online ? rate(m.rateBps) : '—'}</b></div>
         <div><span>Machines</span><b>${m.rovers}</b></div>
         <div><span>Up for</span><b>${m.online && m.connectedAt ? duration(serverNow() - m.connectedAt) : '—'}</b></div>
@@ -533,6 +537,7 @@ function renderBases() {
       ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)})</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
+      ${m.auto && !m.online ? `<div class="actions" style="margin-top:6px"><button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button></div>` : ''}
     </div>`,
     )
     .join(''));
@@ -595,6 +600,7 @@ function describe(ev: LogEvent) {
     case 'device.added': return `Login ${ev.serial} added by ${ev.by}`;
     case 'device.updated': return `Login ${ev.serial} updated (${((ev.fields as string[]) || []).join(', ')}) by ${ev.by}`;
     case 'device.removed': return `Login ${ev.serial} deleted by ${ev.by}`;
+    case 'mountpoint.removed': return `Mountpoint ${ev.mount} removed by ${ev.by}`;
     case 'webui.opened': return `${receiverName(String(ev.receiver))} web UI opened by ${ev.by}`;
     case 'receiver.reachable': return `${receiverName(String(ev.receiver))} web UI reachable again`;
     case 'receiver.unreachable': return `${receiverName(String(ev.receiver))} web UI not reachable${ev.reason ? ` (${ev.reason})` : ''}`;
@@ -920,6 +926,23 @@ document.addEventListener('click', (e) => {
   else if (t.dataset.webuiTab) void openWebUiTab(t.dataset.webuiTab);
 });
 
+// Mountpoints a base named itself can be removed once that base has stopped sending to them
+document.addEventListener('click', async (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-remove-mount]');
+  if (!t?.dataset.removeMount) return;
+  const name = t.dataset.removeMount;
+  if (!confirm(`Remove mountpoint ${name}? If the base connects to it again it will be created again.`)) return;
+  try {
+    await api('DELETE', `/api/mountpoints/${encodeURIComponent(name)}`);
+    app.mountpoints = app.mountpoints.filter((m) => m.name !== name);
+    renderBases();
+    renderDevices();
+    renderMap();
+  } catch (err) {
+    alert((err as Error).message);
+  }
+});
+
 // ------------------------------------------------------------------ online history
 const historyDlg = $<HTMLDialogElement>('#historyDlg');
 let historySerial: string | null = null;
@@ -929,7 +952,7 @@ const hms = (sec: number) => {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = Math.floor(sec % 60);
   return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(s2).padStart(2, '0')}s` : `${s2}s`;
 };
-const when = (ms: number) => new Date(ms).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
 

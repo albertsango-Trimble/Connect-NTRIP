@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { AutoMountpoints } from './automounts.js';
 
 const CONFIG_PATH = process.env.CASTER_CONFIG || path.resolve('config.json');
 
@@ -32,6 +33,12 @@ export function loadConfig() {
     if (!m.sourcePassword) throw new Error(`Mountpoint ${m.name} needs a sourcePassword`);
     names.add(m.name);
   }
+  fs.mkdirSync(cfg.dataDir, { recursive: true });
+  // Mountpoints the bases named themselves (kept from earlier runs); also lets receivers refer to them
+  cfg.autoMounts = new AutoMountpoints(cfg);
+  for (const m of cfg.mountpoints) names.add(m.name);
+  if (!cfg.mountpoints.length && !cfg.autoMounts.enabled) console.warn('No mountpoints configured and autoMountpoints is off: no base can connect.');
+
   // Base receivers whose own web interface can be opened from the extension
   cfg.receivers ??= [];
   cfg.webUi = { port: 8081, ...(cfg.webUi || {}) };

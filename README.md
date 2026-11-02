@@ -51,9 +51,19 @@ Any small Ubuntu 22.04/24.04 VM is enough (1 vCPU, 1 GB RAM should comfortably h
    - mountpoint names, if you want different ones
 5. `sudo systemctl restart connect-ntrip`, then check `https://caster.yourdomain.com/api/health`.
 
-Logs: `journalctl -u connect-ntrip -f`. Rover logins live in `/var/lib/connect-ntrip/devices.json` (hashed).
+Logs: `journalctl -u connect-ntrip -f`. To update the caster to the latest version later: `cd ~/Connect-NTRIP && bash deploy/update.sh` (keeps your config, logins and history).
+
+ Rover logins live in `/var/lib/connect-ntrip/devices.json` (hashed).
 
 ## 2. Point the Trimble base at the caster
+
+### Let the base name its own mountpoints (simplest)
+
+With `autoMountpoints` on (it is in the example config), you don't need to set up mountpoints on the caster at all. In the receiver's NTRIP output, type **any mountpoint name you like** and use the shared `autoMountpoints.sourcePassword`. The caster creates the mountpoint when the base connects, and works out the format from the data: RTCM 3, CMR+ or CMRx. The base's position comes from RTCM 1005/1006; CMR+/CMRx streams take it from an RTCM stream the same base is sending. NTRIP 2 bases that send an `Ntrip-STR` header can also supply it.
+
+These mountpoints show as **Set by base** in the Bases tab, appear in the sourcetable while the base is sending, and are remembered for rover logins and history. Once a base stops sending to one, you can remove it from the Bases tab. Configured mountpoints (below) still use their own passwords; the shared password can't take them over.
+
+### Or configure them yourself
 
 A caster relays streams; it does not convert formats. So the receiver sends **one stream per format**, each to its own mountpoint. In the receiver's web interface (I/O configuration), add an NTRIP output for each format:
 
