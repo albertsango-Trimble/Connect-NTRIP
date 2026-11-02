@@ -1,17 +1,13 @@
 // Online history per rover login: one JSON-lines file per serial number in <dataDir>/history.
 // Each line is a finished session ({ type: 'session', ... }) or a refused login ({ type: 'rejected', ... }).
+// History is kept for good: nothing is ever removed from these files.
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DAY = 24 * 60 * 60 * 1000;
-
 export class History {
-  constructor(dataDir, keepDays = 365) {
+  constructor(dataDir) {
     this.dir = path.join(dataDir, 'history');
-    this.keepDays = keepDays;
     fs.mkdirSync(this.dir, { recursive: true });
-    this.prune();
-    setInterval(() => this.prune(), DAY).unref();
   }
 
   file(serial) {
@@ -44,21 +40,4 @@ export class History {
     return out.slice(0, limit);
   }
 
-  /** Drops records older than keepDays (0 keeps everything). */
-  prune() {
-    if (!this.keepDays) return;
-    const cutoff = Date.now() - this.keepDays * DAY;
-    for (const name of fs.readdirSync(this.dir)) {
-      if (!name.endsWith('.jsonl')) continue;
-      const f = path.join(this.dir, name);
-      const lines = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
-      const keep = lines.filter(line => {
-        try { const r = JSON.parse(line); return (r.end ?? r.time ?? 0) >= cutoff; } catch { return false; }
-      });
-      if (keep.length !== lines.length) {
-        fs.writeFileSync(f + '.tmp', keep.length ? keep.join('\n') + '\n' : '', { mode: 0o600 });
-        fs.renameSync(f + '.tmp', f);
-      }
-    }
-  }
 }

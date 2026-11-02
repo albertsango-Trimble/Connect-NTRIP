@@ -5,6 +5,8 @@
 // <dataDir>/projects/projects.json             the list of projects and their base passwords
 // <dataDir>/projects/<id>/devices.json         that project's rover logins
 // <dataDir>/projects/<id>/history/*.jsonl      that project's rover online history
+// <dataDir>/projects/<id>/events.jsonl         that project's event log (never cleared)
+// <dataDir>/events.jsonl                       events of bases not yet in any project
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -30,7 +32,7 @@ export class Projects {
     this.data.projects ??= {};
     this.stores = new Map(); // id -> { devices, history }
     // Data kept from before projects, used until a project takes it over
-    this.legacy = { devices: new DeviceStore(config.dataDir), history: new History(config.dataDir, config.historyDays) };
+    this.legacy = { devices: new DeviceStore(config.dataDir), history: new History(config.dataDir) };
   }
 
   save() {
@@ -120,10 +122,39 @@ export class Projects {
     let s = this.stores.get(id);
     if (!s) {
       const d = this.projectDir(id);
-      s = { devices: new DeviceStore(d), history: new History(d, this.config.historyDays) };
+      s = { devices: new DeviceStore(d), history: new History(d) };
       this.stores.set(id, s);
     }
     return s;
+  }
+
+  eventsFile(id) {
+    return id && ID_RE.test(id) ? path.join(this.projectDir(id), 'events.jsonl') : path.join(this.config.dataDir, 'events.jsonl');
+  }
+
+  /** Adds an event to its project's log file. The log is never cleared. */
+  appendEvent(ev) {
+    try {
+      fs.appendFileSync(this.eventsFile(ev.project), JSON.stringify(ev) + '\n', { mode: 0o600 });
+    } catch (err) {
+      console.error(`Could not write the event log: ${err.message}`);
+    }
+  }
+
+  /** The newest `limit` events of a project, oldest first, optionally only those before `before` (ISO time). */
+  readEvents(id, { before = null, limit = 100 } = {}) {
+    const f = this.eventsFile(id);
+    if (!fs.existsSync(f)) return [];
+    const out = [];
+    const lines = fs.readFileSync(f, 'utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+      if (!lines[i]) continue;
+      try {
+        const ev = JSON.parse(lines[i]);
+        if (!before || ev.time < before) out.push(ev);
+      } catch { /* skip a damaged line */ }
+    }
+    return out.reverse();
   }
 
   devicesFor(id) { return this.storesFor(id).devices; }

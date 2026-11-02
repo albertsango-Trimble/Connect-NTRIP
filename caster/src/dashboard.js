@@ -213,6 +213,12 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       // Everything below manages the project: project admins only
       if (!admin) throw new UserError('Only project admins can do this', 403);
 
+      // GET /api/log?before=<ISO time>&limit=200 -> older entries of this project's log (kept for good)
+      if (req.method === 'GET' && url.pathname === '/api/log') {
+        const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
+        return send(res, 200, { events: projects.readEvents(P, { before: url.searchParams.get('before') || null, limit }) });
+      }
+
       // GET /api/devices/export  -> this project's logins for importing into another project
       if (req.method === 'GET' && url.pathname === '/api/devices/export') {
         state.event('devices.exported', { project: P, by: user.email, count: Object.keys(devices.devices).length });
@@ -249,7 +255,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         const days = Math.max(0, Number(url.searchParams.get('days') ?? 30));
         const fromMs = days ? Date.now() - days * 86_400_000 : 0;
         const live = state.roverViews(P).filter(c => c.serial === serial);
-        return send(res, 200, { device, days, keepDays: config.historyDays, live, records: history.read(serial, { fromMs }) });
+        return send(res, 200, { device, days, keepDays: 0, live, records: history.read(serial, { fromMs }) });
       }
 
       // /api/devices[/:serial]

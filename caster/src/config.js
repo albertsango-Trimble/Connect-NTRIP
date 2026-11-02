@@ -23,7 +23,8 @@ export function loadConfig() {
   cfg.allowedOrigins ??= [];
   cfg.tcApiHosts ??= ['https://app.connect.trimble.com/tc/api/2.0'];
   cfg.sourceIdleTimeoutSec ??= 60;
-  cfg.historyDays ??= 365; // how long each rover's online history is kept (0 = forever)
+  // Rover history and the event log are kept for good; an old historyDays setting is ignored
+  if (cfg.historyDays) console.warn('historyDays is no longer used: rover history and the log are never cleared');
   cfg.mountpoints ??= [];
 
   const names = new Set();

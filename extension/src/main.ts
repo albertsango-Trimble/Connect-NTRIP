@@ -775,18 +775,39 @@ function describe(ev: LogEvent) {
     default: return ev.type;
   }
 }
+/** Whether the caster may have log entries older than the ones loaded (the log is never cleared). */
+let logHasOlder = true;
 function renderLog() {
+  const today = new Date().toDateString();
   $('#logList').innerHTML =
-    app.log
+    (app.log
       .slice()
       .reverse()
       .map((ev) => {
         const t = new Date(ev.time);
         const cls = GOOD.has(ev.type) ? 'ev-good' : BAD.has(ev.type) ? 'ev-bad' : '';
-        return `<li><time>${t.toLocaleTimeString([], { hour12: false })}</time><span class="${cls}">${esc(describe(ev))}</span></li>`;
+        const stamp = t.toDateString() === today ? t.toLocaleTimeString([], { hour12: false }) : when(t.getTime());
+        return `<li><time title="${esc(t.toLocaleString())}">${esc(stamp)}</time><span class="${cls}">${esc(describe(ev))}</span></li>`;
       })
-      .join('') || '<li class="empty">No events yet.</li>';
+      .join('') || '<li class="empty">No events yet.</li>') +
+    (app.log.length && logHasOlder ? '<li class="log-more"><button class="link-btn" id="logOlder">Show older entries</button></li>' : '');
 }
+
+$('#logList').addEventListener('click', async (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('#logOlder');
+  if (!btn || !app.log.length) return;
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  try {
+    const { events } = (await api('GET', `/api/log?limit=200&before=${encodeURIComponent(app.log[0].time)}`)) as unknown as { events: LogEvent[] };
+    logHasOlder = events.length === 200;
+    app.log = [...events, ...app.log];
+    renderLog();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = `Couldn't load (${(err as Error).message}). Try again`;
+  }
+});
 
 function renderAll() {
   renderStats();
@@ -857,6 +878,7 @@ function handleMessage(msg: CasterMessage) {
     app.mountpoints = s.mountpoints;
     app.rovers = new Map(s.rovers.map((r) => [r.id, r]));
     app.log = s.log;
+    logHasOlder = s.log.length >= 100;
     app.devices = msg.devices;
     app.receivers = s.receivers ?? [];
     app.project = msg.project;
@@ -887,7 +909,6 @@ function handleMessage(msg: CasterMessage) {
     renderBases();
   } else if (msg.type === 'event') {
     app.log.push(msg.event);
-    if (app.log.length > 300) app.log.shift();
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
   } else if (msg.type === 'project') {

@@ -22,7 +22,6 @@
     "https://app32.connect.trimble.com/tc/api/2.0"
   ],
   "sourceIdleTimeoutSec": 60,
-  "historyDays": 365,
   "webUi": {
     "domain": "bases.example.com",
     "port": 8081

@@ -336,3 +336,4 @@ body.view-only #settingsBtn,
 body.view-only [data-history], body.view-only [data-kick], body.view-only [data-place],
 body.view-only [data-receiver-add], body.view-only [data-receiver-edit], body.view-only [data-remove-mount],
 body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !important; }
+.log-more { justify-content: center; border-bottom: 0; }

@@ -25,6 +25,7 @@ export class CasterState extends EventEmitter {
     const ev = { type, time: new Date().toISOString(), ...data };
     this.log.push(ev);
     if (this.log.length > LOG_SIZE) this.log.shift();
+    this.projects?.appendEvent(ev); // kept on disk for good
     const extra = Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
     console.log(`[${ev.time}] ${type} ${extra}`);
     this.emit('event', ev);
@@ -293,7 +294,7 @@ export class CasterState extends EventEmitter {
       mountpoints: this.mountpointViews(project),
       rovers: this.roverViews(project, true),
       receivers: this.receiverViews(project),
-      log: this.log.filter(ev => ev.project === project).slice(-100),
+      log: this.projects ? this.projects.readEvents(project, { limit: 100 }) : this.log.filter(ev => ev.project === project).slice(-100),
     };
   }
 }
