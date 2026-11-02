@@ -18,8 +18,8 @@ const receiverStore = new ReceiverStore(config);
 config.receiverStore = receiverStore;
 
 console.log(`${config.casterName}: ${config.mountpoints.length} mountpoint(s), ${projects.list().length} project(s)`);
-if (!config.adminEmails.length && !config.dashboardToken) {
-  console.warn('No adminEmails or dashboardToken configured: nobody will be able to open the dashboard.');
+if (!config.adminEmails.length) {
+  console.warn('No adminEmails configured: the bases and logins from before projects stay unassigned until a caster operator opens the extension.');
 }
 
 const tokens = new Tokens(loadSecret(config));

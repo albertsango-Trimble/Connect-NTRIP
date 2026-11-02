@@ -65,16 +65,16 @@ export class Projects {
 
   /**
    * Called whenever the extension is opened in a project: registers it the first time (with its own base
-   * password) and keeps its name up to date. The very first project also takes over everything from before
-   * projects existed, and keeps the base password from the config file so those bases carry on unchanged.
+   * password) and keeps its name up to date. The first project a caster operator opens also takes over everything
+   * from before projects existed, and keeps the base password from the config file so those bases carry on unchanged.
    */
-  open(id, name) {
+  open(id, name, { canClaimLegacy = true } = {}) {
     if (!ID_RE.test(id || '')) throw new UserError('Unknown project');
     let p = this.data.projects[id];
     let claimed = false;
     if (!p) {
       p = { name: String(name || '').slice(0, 120), created: new Date().toISOString() };
-      if (!this.legacyOwner) {
+      if (!this.legacyOwner && canClaimLegacy) {
         p.sourcePassword = this.config.autoMounts?.opts.sourcePassword || generatePassword();
         this.data.legacyOwner = id;
         this.data.projects[id] = p;

@@ -605,7 +605,20 @@ function receiverStatus(r: Receiver) {
   return r.reachable ? { cls: 'online', text: 'Web UI reachable' } : { cls: 'offline', text: `Web UI not reachable${r.error ? ` (${r.error})` : ''}` };
 }
 
+/** Project members who aren't project admins get a view-only map. */
+const viewOnly = () => !!app.project && !app.project.isAdmin;
+
+function applyRole() {
+  document.body.classList.toggle('view-only', viewOnly());
+  if (viewOnly()) {
+    const active = document.querySelector<HTMLButtonElement>('.tabs button.active');
+    if (active && (active.dataset.tab === 'devices' || active.dataset.tab === 'log')) document.querySelector<HTMLButtonElement>('.tabs button[data-tab="rovers"]')?.click();
+    if (dlg.open) dlg.close();
+  }
+}
+
 function renderReceivers() {
+  if (viewOnly()) return '';
   return `<div class="section-head"><div class="section-title">Base receivers</div><button class="link-btn" data-receiver-add>+ Add base receiver</button></div>${
     app.receivers.length ? '' : '<div class="card-sub" style="padding:0 2px 4px">Add a base receiver to open its own web interface from here.</div>'
   }${app.receivers
@@ -679,7 +692,7 @@ function renderBases() {
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
       ${m.manualPosition && m.position?.from !== 'set by hand' ? `<div class="card-sub" style="margin-top:4px">Position set by hand is on standby: the base's data gives the position while it is sending.</div>` : ''}
-      ${!m.position ? '<div class="warn">No position: this base isn\'t on the map. Use <b>Set position</b> to place it.</div>' : ''}
+      ${!m.position ? `<div class="warn">No position: this base isn't on the map.${viewOnly() ? '' : ' Use <b>Set position</b> to place it.'}</div>` : ''}
       ${!positionFromData(m) || (m.auto && !m.online) ? `<div class="actions" style="margin-top:6px">
         ${!positionFromData(m) ? `<button class="link-btn" data-place="${esc(m.name)}">${m.manualPosition ? 'Change set position' : 'Set position'}</button>` : ''}
         ${m.auto && !m.online ? `<button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button>` : ''}
@@ -847,6 +860,8 @@ function handleMessage(msg: CasterMessage) {
     app.devices = msg.devices;
     app.receivers = s.receivers ?? [];
     app.project = msg.project;
+    applyRole();
+    if (viewOnly()) setPill('on', 'Live · view only');
     renderAll();
   } else if (msg.type === 'tick') {
     app.serverOffset = msg.serverTime - Date.now();
@@ -1634,6 +1649,7 @@ const dlg = $<HTMLDialogElement>('#settingsDlg');
 const settingsForm = $<HTMLFormElement>('#settingsForm');
 const sfield = (name: string) => settingsForm.elements.namedItem(name) as HTMLInputElement;
 function openSettings() {
+  if (viewOnly()) return;
   // A project with no caster yet is offered the one last used in this browser
   sfield('casterUrl').value = settings.casterUrl || store('casterUrl') || '';
   $('#settingsProjectNote').classList.toggle('hidden', !inConnectProject);

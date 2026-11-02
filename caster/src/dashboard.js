@@ -1,9 +1,10 @@
 // HTTPS-facing (via reverse proxy) API + WebSocket feed for the Trimble Connect extension.
 //
 // Auth: the extension sends its Trimble Connect access token and the Connect project it is open in.
-// The caster checks the token against the Trimble Connect API (/users/me), allows the email if it's in
-// config.adminEmails, and checks the user can open that project. Everything the extension sees and changes
-// (bases, machines, logins, receivers, history, log) is limited to that project.
+// The caster checks the token against the Trimble Connect API (/users/me) and that the user can open that
+// project. Everything the extension sees and changes (bases, machines, logins, receivers, history, log) is
+// limited to that project. Project admins (role ADMIN in the project team, or anyone in config.adminEmails)
+// can manage everything; other project members get a view-only map of bases and machines.
 // A static dashboardToken can also be set for local development.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -38,11 +39,8 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         if (res.ok) {
           const me = await res.json();
           const email = String(me.email || '').toLowerCase();
-          if (config.adminEmails.includes(email)) {
-            user = { email, id: me.id || null, name: [me.firstName, me.lastName].filter(Boolean).join(' ') || email };
-          } else {
-            console.warn(`Dashboard login refused for ${email || '(no email)'}: not in adminEmails`);
-          }
+          if (email) user = { email, id: me.id || null, name: [me.firstName, me.lastName].filter(Boolean).join(' ') || email, operator: config.adminEmails.includes(email) };
+          else console.warn('Dashboard login refused: Trimble Connect returned no email for this token');
           break;
         }
       } catch (err) {
@@ -78,7 +76,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
    * Anything that can't be confirmed counts as not an admin.
    */
   async function isProjectAdmin(token, user, projectId) {
-    if (user.dev) return true;
+    if (user.dev || user.operator) return true; // caster operators (adminEmails) manage every project
     const key = hash(`${token}|admin|${projectId}`);
     const cached = adminCache.get(key);
     if (cached && cached.expires > Date.now()) return cached.admin;
@@ -110,9 +108,10 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
     if (!user) throw new UserError('Not authorised', 401);
     if (!projectId) throw new UserError('Open the extension inside a Trimble Connect project', 400);
     if (!(await canOpenProject(token, user, projectId))) throw new UserError('You do not have access to this project', 403);
-    const { project, claimedLegacy } = projects.open(projectId, projectName);
-    if (claimedLegacy) state.event('project.took_over_existing', { project: projectId, by: user.email });
     const admin = await isProjectAdmin(token, user, projectId);
+    // Only a caster operator can take over the bases and logins from before projects existed
+    const { project, claimedLegacy } = projects.open(projectId, projectName, { canClaimLegacy: !!(user.dev || user.operator) });
+    if (claimedLegacy) state.event('project.took_over_existing', { project: projectId, by: user.email });
     return { user: { ...user, projectAdmin: admin }, project, admin };
   }
 
@@ -154,6 +153,16 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
     catch { throw new UserError('Invalid JSON'); }
   }
 
+  // What members who aren't project admins see: the map of bases and machines, without network addresses,
+  // the log, logins or base receivers.
+  const viewerRover = ({ addr, agent, ...r }) => r;
+  const viewerMount = ({ addr, manualPosition, ...m }) => m;
+  const viewerMounts = P => state.mountpointViews(P).map(viewerMount);
+  function viewerSnapshot(P) {
+    const s = state.snapshot(P);
+    return { ...s, mountpoints: s.mountpoints.map(viewerMount), rovers: s.rovers.map(viewerRover), receivers: [], log: [] };
+  }
+
   const server = http.createServer(async (req, res) => {
     cors(req, res);
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
@@ -184,7 +193,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         const m = config.mountpoints.find(x => x.name === name);
         return m && projects.projectOf(m) === P ? m : null;
       };
-      const pushDevices = () => broadcast({ type: 'devices', devices: devices.list() }, P);
+      const pushDevices = () => broadcast({ type: 'devices', devices: devices.list() }, P, true);
 
       // GET /api/project   POST /api/project/base-password (new base password for this project)
       if (req.method === 'GET' && url.pathname === '/api/project') return send(res, 200, projectInfo(project, admin));
@@ -198,8 +207,11 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       }
 
       // GET /api/snapshot   GET /api/mountpoints
-      if (req.method === 'GET' && url.pathname === '/api/snapshot') return send(res, 200, state.snapshot(P));
-      if (req.method === 'GET' && url.pathname === '/api/mountpoints') return send(res, 200, state.mountpointViews(P));
+      if (req.method === 'GET' && url.pathname === '/api/snapshot') return send(res, 200, admin ? state.snapshot(P) : viewerSnapshot(P));
+      if (req.method === 'GET' && url.pathname === '/api/mountpoints') return send(res, 200, admin ? state.mountpointViews(P) : viewerMounts(P));
+
+      // Everything below manages the project: project admins only
+      if (!admin) throw new UserError('Only project admins can do this', 403);
 
       // GET /api/devices/export  -> this project's logins for importing into another project
       if (req.method === 'GET' && url.pathname === '/api/devices/export') {
@@ -293,7 +305,8 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
           const p = state.positions.set(name, await readJson(req), user.email);
           state.event('mountpoint.position_set', { project: P, mount: name, by: user.email, lat: p.lat, lon: p.lon });
         }
-        broadcast({ type: 'mountpoints', mountpoints: state.mountpointViews(P) }, P);
+        broadcast({ type: 'mountpoints', mountpoints: state.mountpointViews(P) }, P, true);
+        broadcast({ type: 'mountpoints', mountpoints: viewerMounts(P) }, P, false, true);
         return send(res, 200, state.sourceView(m));
       }
 
@@ -326,7 +339,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         } else {
           return send(res, 404, { error: 'Not found' });
         }
-        broadcast({ type: 'receivers', receivers: state.receiverViews(P) }, P);
+        broadcast({ type: 'receivers', receivers: state.receiverViews(P) }, P, true);
         return send(res, 200, r ? state.receiverViews(P).find(x => x.id === r.id) : { ok: true });
       }
 
@@ -383,22 +396,30 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       clearTimeout(authTimer);
       ws.project = granted.project.id;
       ws.admin = granted.admin;
+      if (!granted.admin) console.log(`${granted.user.email} opened project ${ws.project} (view only)`);
       authed.add(ws);
       ws.send(JSON.stringify({
         type: 'hello', user: granted.user, project: projectInfo(granted.project, granted.admin),
-        snapshot: state.snapshot(ws.project), devices: projects.devicesFor(ws.project).list(),
+        snapshot: granted.admin ? state.snapshot(ws.project) : viewerSnapshot(ws.project),
+        devices: granted.admin ? projects.devicesFor(ws.project).list() : [],
       }));
     });
     ws.on('close', () => { clearTimeout(authTimer); authed.delete(ws); });
   });
 
-  function broadcast(msg, project, adminsOnly = false) {
+  /** Sends to a project's sockets: everyone, admins only, or (viewersOnly) members who aren't admins. */
+  function broadcast(msg, project, adminsOnly = false, viewersOnly = false) {
     const data = JSON.stringify(msg);
-    for (const ws of authed) if (ws.project === project && (!adminsOnly || ws.admin) && ws.readyState === ws.OPEN) ws.send(data);
+    for (const ws of authed) {
+      if (ws.project !== project || ws.readyState !== ws.OPEN) continue;
+      if ((adminsOnly && !ws.admin) || (viewersOnly && ws.admin)) continue;
+      ws.send(data);
+    }
   }
 
   // Push discrete events immediately (only to their own project); positions and rates once a second.
-  state.on('event', ev => { if (ev.project) broadcast({ type: 'event', event: ev }, ev.project); });
+  // The log is for admins; members who aren't admins just see the map
+  state.on('event', ev => { if (ev.project) broadcast({ type: 'event', event: ev }, ev.project, true); });
   const dirty = new Set();
   state.on('position', c => dirty.add(c.id));
   state.on('tick', () => {
@@ -410,14 +431,9 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         const c = state.clients.get(id);
         if (c?.project === P && c.gga) positions.push({ id, gga: c.gga, ggaAt: c.ggaAt, point: c.track[c.track.length - 1] || null });
       }
-      broadcast({
-        type: 'tick',
-        serverTime: Date.now(),
-        positions,
-        mountpoints: state.mountpointViews(P),
-        rovers: state.roverViews(P),
-        receivers: state.receiverViews(P),
-      }, P);
+      const tick = { type: 'tick', serverTime: Date.now(), positions };
+      broadcast({ ...tick, mountpoints: state.mountpointViews(P), rovers: state.roverViews(P), receivers: state.receiverViews(P) }, P, true);
+      broadcast({ ...tick, mountpoints: viewerMounts(P), rovers: state.roverViews(P).map(viewerRover), receivers: [] }, P, false, true);
     }
     dirty.clear();
   });

@@ -328,3 +328,11 @@ dialog input { width: 100%; }
 .login-tools .hint { flex: 1 1 160px; }
 #importPreview { margin-bottom: 10px; }
 .import-list { margin: 6px 0; padding-left: 18px; max-height: 180px; overflow: auto; font-size: 13px; }
+
+/* Project members who aren't project admins: view-only map */
+body.view-only .tabs button[data-tab="devices"],
+body.view-only .tabs button[data-tab="log"],
+body.view-only #settingsBtn,
+body.view-only [data-history], body.view-only [data-kick], body.view-only [data-place],
+body.view-only [data-receiver-add], body.view-only [data-receiver-edit], body.view-only [data-remove-mount],
+body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !important; }

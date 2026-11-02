@@ -46,7 +46,7 @@ Any small Ubuntu 22.04/24.04 VM is enough (1 vCPU, 1 GB RAM should comfortably h
    ```
 4. Edit `/etc/connect-ntrip/config.json`:
    - `sourcePassword` for each mountpoint (the base uses these)
-   - `adminEmails`: Trimble Connect accounts allowed to open the dashboard
+   - `adminEmails`: caster operators, treated as admins in every project (project members can open the extension without being listed)
    - `lat`/`lon` per mountpoint (used for the sourcetable and for CMRx/CMR+ base markers)
    - mountpoint names, if you want different ones
 5. `sudo systemctl restart connect-ntrip`, then check `https://caster.yourdomain.com/api/health`.
@@ -63,7 +63,8 @@ Everything in the extension belongs to the Trimble Connect project it is opened 
 - **Rovers sign in against the logins of the base's project.** A machine working on two projects needs a login in each.
 - **Copy logins between projects** with **Logins → Export** (downloads a file) and **Logins → Import** in the other project. Passwords travel hashed, so machines keep their existing password; logins already in the project are kept unless you tick *Replace*. Allowed-mountpoint limits are not copied.
 - **Upgrading from before projects:** the first project to open the extension takes over the existing bases, logins, history and receivers, and keeps the `autoMountpoints.sourcePassword` from the config, so those bases carry on without changes. Open the extension in the right project first.
-- Access is checked with Trimble Connect: you must be in `adminEmails` and be able to open the project.
+- **Who can open it:** anyone who is a member of the Connect project. **Project admins** (role Admin in the project's Team, or anyone in `adminEmails`) manage everything: bases, logins, receivers, history, log and settings. **Project users** get a view-only map with the Machines and Bases lists, without network addresses, logins, the log or any edit buttons. The caster enforces this, not just the page.
+- `adminEmails` are caster operators: they count as admins in every project, and only they can take over the data from before projects.
 
 ## 2. Point the Trimble base at the caster
 
@@ -91,7 +92,7 @@ Caster address `caster.yourdomain.com`, port `2101`, NTRIP version 1 or 2 (both 
 
 Each base receiver listed in the config gets an **Open web UI** button (Bases tab, and the base's popup on the map). The receiver's web interface opens in a panel over the map, or in a new tab.
 
-How it works: the caster proxies the receiver's web server at `https://<receiver id>.bases.yourdomain.com`. Caddy issues that certificate automatically (only for receivers in the config). The extension asks the caster for a one-time link valid for 60 seconds, which only `adminEmails` users can get; opening it signs that browser in to that one receiver for 8 hours. The proxy fills in the receiver's own login, so users never need the receiver password, and it fixes the receiver's headers so its pages can be shown inside Connect.
+How it works: the caster proxies the receiver's web server at `https://<receiver id>.bases.yourdomain.com`. Caddy issues that certificate automatically (only for receivers in the config). The extension asks the caster for a one-time link valid for 60 seconds, which only project admins can get; opening it signs that browser in to that one receiver for 8 hours. The proxy fills in the receiver's own login, so users never need the receiver password, and it fixes the receiver's headers so its pages can be shown inside Connect.
 
 **Adding a receiver from the extension:** Bases tab → **+ Add base receiver**: name, model, the receiver's web address (as the caster server can reach it), its web login, and which mountpoints are its streams. Receivers added this way are kept in `/var/lib/connect-ntrip/receivers.json` (readable only by the caster; the password is never sent back to the browser) and can be edited or removed with **Edit**. Receivers listed in the config file (below) also show, marked *server config*.
 
@@ -147,7 +148,7 @@ sudo systemctl start connect-ntrip
    `https://albertsango-trimble.github.io/Connect-NTRIP/manifest.json`.
 5. Open the extension, click the gear, enter `https://caster.yourdomain.com`, and allow the access-token prompt.
 
-The caster checks the Trimble Connect token against the Connect API (`/users/me`) and lets the user in only if their email is in `adminEmails`. For testing the page outside Connect, set `dashboardToken` in the config and enter it in the extension's settings; leave it empty in production.
+The caster checks the Trimble Connect token against the Connect API (`/users/me`), checks the user can open the project, and reads their role from the project's team. For testing the page outside Connect, set `dashboardToken` in the config and enter it in the extension's settings; leave it empty in production.
 
 ## Testing without hardware
 
