@@ -305,3 +305,4 @@ dialog input { width: 100%; }
 @media (max-width: 520px) { .place-fields { grid-template-columns: 1fr 1fr; } }
 .place-mode[hidden] { display: none; }
 .pos-lines { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 8px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pos-lines.ll { margin-top: 2px; font-weight: 500; font-size: 12px; }

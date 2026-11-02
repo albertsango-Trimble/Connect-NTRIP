@@ -426,7 +426,7 @@ function basePopup(key: string) {
 
 function popupPosition(p: NonNullable<Mountpoint['position']>) {
   const c = projectCoords(p);
-  const rows = c.rows.map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join('');
+  const rows = [...c.rows, ...c.ll].map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join('');
   const elev = c.elevation ? `<tr><td>Elevation</td><td>${esc(c.elevation.text)}<br><small>${esc(c.elevation.note)}</small></td></tr>` : '';
   return `${rows}${elev}<tr><td></td><td><small>${esc(c.crs)} · from ${esc(p.from)}</small></td></tr>`;
 }
@@ -530,7 +530,7 @@ function msmSummary(types: number[]) {
 
 const FROM_DATA = new Set(['RTCM 1005/1006', 'CMR Type 1']);
 /** True when the base's own data gives its position, so there is nothing to set by hand. */
-const positionFromData = (m: Mountpoint) => !!m.position && FROM_DATA.has(m.position.from);
+const positionFromData = (m: Mountpoint) => !!m.position && (FROM_DATA.has(m.position.from) || m.position.from.startsWith('same base as'));
 
 /**
  * The base position in the project's coordinate system: easting and northing, and the elevation in the
@@ -554,9 +554,10 @@ function projectCoords(p: { lat: number; lon: number; h: number | null }) {
       elevation = { text: `${p.h.toFixed(3)} m`, note: 'ellipsoidal height (no geoid in the project\'s coordinate system)' };
     }
   }
+  const ll: [string, string][] = [['Latitude', `${p.lat.toFixed(8)}°`], ['Longitude', `${p.lon.toFixed(8)}°`]];
   return en && Number.isFinite(en[0])
-    ? { rows: [['Easting', `${en[0].toFixed(3)} m`], ['Northing', `${en[1].toFixed(3)} m`]] as [string, string][], crs, elevation }
-    : { rows: [['Latitude', p.lat.toFixed(7)], ['Longitude', p.lon.toFixed(7)]] as [string, string][], crs: 'WGS84', elevation };
+    ? { rows: [['Easting', `${en[0].toFixed(3)} m`], ['Northing', `${en[1].toFixed(3)} m`]] as [string, string][], ll, crs, elevation }
+    : { rows: [] as [string, string][], ll, crs: 'WGS84', elevation };
 }
 
 /** Position lines for the Bases tab. */
@@ -566,6 +567,7 @@ function positionLines(m: Mountpoint) {
   const parts = c.rows.map(([k, v]) => `${k} ${v}`);
   if (c.elevation) parts.push(`Elevation ${c.elevation.text}`);
   return `<div class="pos-lines">${parts.map((x) => `<span>${esc(x)}</span>`).join('')}</div>
+    <div class="pos-lines ll">${c.ll.map(([k, v]) => `<span>${esc(`${k} ${v}`)}</span>`).join('')}</div>
     <div class="card-sub">${esc(c.crs)}${c.elevation ? ` · elevation ${esc(c.elevation.note)}` : ''} · from ${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''}</div>`;
 }
 
@@ -613,8 +615,9 @@ function renderBases() {
       <div class="grid">
         <div><span>Status</span><b>${m.online ? 'Online' : m.lastSeen ? `Last seen ${when(Date.parse(m.lastSeen))}` : 'Offline'}</b></div>
         <div><span>Data in</span><b>${m.online ? rate(m.rateBps) : '—'}</b></div>
-        <div><span>Total in</span><b>${m.online ? bytes(m.bytesIn) : '—'}</b></div>
+        <div><span>Machines</span><b>${m.rovers}</b></div>
         <div><span>Up for</span><b>${m.online && m.connectedAt ? duration(serverNow() - m.connectedAt) : '—'}</b></div>
+        <div><span>Total in</span><b>${m.online ? bytes(m.bytesIn) : '—'}</b></div>
         <div><span>Last data</span><b>${m.lastDataAt ? `${duration(serverNow() - m.lastDataAt)} ago` : '—'}</b></div>
       </div>
       ${positionLines(m)}
