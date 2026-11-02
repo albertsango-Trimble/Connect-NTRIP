@@ -83,6 +83,8 @@ Each base receiver listed in the config gets an **Open web UI** button (Bases ta
 
 How it works: the caster proxies the receiver's web server at `https://<receiver id>.bases.yourdomain.com`. Caddy issues that certificate automatically (only for receivers in the config). The extension asks the caster for a one-time link valid for 60 seconds, which only `adminEmails` users can get; opening it signs that browser in to that one receiver for 8 hours. The proxy fills in the receiver's own login, so users never need the receiver password, and it fixes the receiver's headers so its pages can be shown inside Connect.
 
+**Adding a receiver from the extension:** Bases tab → **+ Add base receiver**: name, model, the receiver's web address (as the caster server can reach it), its web login, and which mountpoints are its streams. Receivers added this way are kept in `/var/lib/connect-ntrip/receivers.json` (readable only by the caster; the password is never sent back to the browser) and can be edited or removed with **Edit**. Receivers listed in the config file (below) also show, marked *server config*.
+
 Setup:
 
 1. Add a wildcard DNS record `*.bases.yourdomain.com` → the VM's IP (the setup script uses `bases.<DOMAIN>` unless you set `BASES_DOMAIN`).

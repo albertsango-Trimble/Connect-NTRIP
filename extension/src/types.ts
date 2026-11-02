@@ -134,6 +134,12 @@ export interface Receiver {
   model: string;
   mountpoints: string[];
   webUi: boolean;
+  /** Receiver web address and login name (the password is never sent to the browser) */
+  webUrl?: string;
+  username?: string;
+  hasPassword?: boolean;
+  /** "extension" when added here (can be edited here), "config" when set in the server config file */
+  source?: 'extension' | 'config';
   /** null until the caster has checked */
   reachable: boolean | null;
   httpStatus?: number;
@@ -158,4 +164,5 @@ export type CasterMessage =
   | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[]; receivers?: Receiver[] }
   | { type: 'event'; event: LogEvent }
   | { type: 'devices'; devices: Device[] }
-  | { type: 'mountpoints'; mountpoints: Mountpoint[] };
+  | { type: 'mountpoints'; mountpoints: Mountpoint[] }
+  | { type: 'receivers'; receivers: Receiver[] };

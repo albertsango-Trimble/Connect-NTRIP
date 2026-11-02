@@ -8,6 +8,8 @@
 // the receiver. The receiver's own login (HTTP Basic or Digest) can be filled in by the proxy so users
 // don't need the receiver password.
 import http from 'node:http';
+import https from 'node:https';
+import tls from 'node:tls';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -173,14 +175,25 @@ div{max-width:440px;background:#fff;border:1px solid #e0e1e9;border-radius:8px;p
 }
 
 // ---------------------------------------------------------------- server
-export function startWebUiProxy({ config, state, tokens }) {
-  const receivers = new Map(); // host -> { r, auth }
-  for (const r of config.receivers) {
-    if (r.webUrl) receivers.set(receiverHost(config, r), { r, auth: new ReceiverAuth(r) });
-  }
-  if (!receivers.size) return null;
-
-  const lookup = req => receivers.get(String(req.headers.host || '').split(':')[0].toLowerCase()) || null;
+export function startWebUiProxy({ config, state, tokens, receiverStore }) {
+  if (!config.webUi?.domain) return null;
+  // The receiver list can change while running (receivers added in the extension), so it is read live.
+  // Login state is kept per receiver and started again when its address or login changes.
+  const auths = new Map(); // id -> { key, auth }
+  const entryFor = r => {
+    const key = `${r.webUrl}|${r.username || ''}|${r.password || ''}`;
+    let a = auths.get(r.id);
+    if (!a || a.key !== key) { a = { key, auth: new ReceiverAuth(r) }; auths.set(r.id, a); }
+    return { r, auth: a.auth };
+  };
+  const lookup = req => {
+    const host = String(req.headers.host || '').split(':')[0].toLowerCase();
+    const r = config.receivers.find(x => x.webUrl && receiverHost(config, x) === host);
+    return r ? entryFor(r) : null;
+  };
+  /** Receivers may serve plain http or https (often with a self-signed certificate). */
+  const client = target => (target.protocol === 'https:' ? https : http);
+  const portOf = target => Number(target.port || (target.protocol === 'https:' ? 443 : 80));
   const isSecure = req => String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 
   function session(req, entry) {
@@ -233,8 +246,8 @@ export function startWebUiProxy({ config, state, tokens }) {
     const uri = req.url;
     const headers = upstreamHeaders(req, target, entry, uri);
     if (body) headers['content-length'] = String(body.length);
-    const preq = http.request({
-      host: target.hostname, port: target.port || 80, method: req.method, path: uri, headers, timeout: 30_000,
+    const preq = client(target).request({
+      host: target.hostname, port: portOf(target), method: req.method, path: uri, headers, timeout: 30_000, rejectUnauthorized: false,
     }, pres => {
       if (pres.statusCode === 401 && !retried && body !== undefined && entry.auth.learn(pres.headers['www-authenticate'])) {
         pres.resume();
@@ -297,37 +310,45 @@ export function startWebUiProxy({ config, state, tokens }) {
     const headers = upstreamHeaders(req, target, entry, req.url);
     headers.connection = 'Upgrade';
     headers.upgrade = req.headers.upgrade;
-    const upstream = net.connect(Number(target.port || 80), target.hostname, () => {
+    const opened = () => {
       const lines = [`${req.method} ${req.url} HTTP/1.1`];
       for (const [k, v] of Object.entries(headers)) for (const vv of [].concat(v)) lines.push(`${k}: ${vv}`);
       upstream.write(lines.join('\r\n') + '\r\n\r\n');
       if (head?.length) upstream.write(head);
       upstream.pipe(socket);
       socket.pipe(upstream);
-    });
+    };
+    const upstream = target.protocol === 'https:'
+      ? tls.connect({ host: target.hostname, port: portOf(target), servername: target.hostname, rejectUnauthorized: false }, opened)
+      : net.connect(portOf(target), target.hostname, opened);
     upstream.on('error', () => socket.destroy());
     socket.on('close', () => upstream.destroy());
   });
 
   server.listen(config.webUi.port, '127.0.0.1', () => {
-    console.log(`Base Web UI proxy listening on 127.0.0.1:${config.webUi.port} for ${[...receivers.keys()].join(', ')}`);
+    console.log(`Base Web UI proxy listening on 127.0.0.1:${config.webUi.port} for *.${config.webUi.domain}`);
   });
 
   // Reachability: a light request every minute, so the extension can show whether the receiver answers.
-  const check = () => {
-    for (const { r } of receivers.values()) {
+  const checkOne = r => {
+      if (!r.webUrl) return;
       const target = new URL(r.webUrl);
-      const req = http.request({ host: target.hostname, port: target.port || 80, method: 'GET', path: '/', timeout: 6000 }, res => {
+      const req = client(target).request({ host: target.hostname, port: portOf(target), method: 'GET', path: '/', timeout: 6000, rejectUnauthorized: false }, res => {
         res.resume();
         state.setReceiverStatus(r.id, { reachable: true, httpStatus: res.statusCode });
       });
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.on('error', err => state.setReceiverStatus(r.id, { reachable: false, error: err.code || err.message }));
       req.end();
-    }
   };
+  const check = () => config.receivers.forEach(checkOne);
   check();
   setInterval(check, 60_000).unref();
+  // A receiver added or changed in the extension is checked straight away
+  receiverStore?.on('change', () => {
+    for (const id of [...auths.keys()]) if (!config.receivers.some(r => r.id === id)) auths.delete(id);
+    check();
+  });
 
   return server;
 }

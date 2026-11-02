@@ -11,7 +11,7 @@ import { isReceiverHost, startLink } from './webui.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
 
-export function startDashboard({ config, state, devices, tokens, history }) {
+export function startDashboard({ config, state, devices, tokens, history, receiverStore }) {
   const authCache = new Map(); // sha256(token) -> { user, expires }
 
   async function authenticate(token) {
@@ -186,6 +186,27 @@ export function startDashboard({ config, state, devices, tokens, history }) {
         config.autoMounts.remove(name);
         state.event('mountpoint.removed', { mount: name, by: user.email });
         return send(res, 200, { ok: true });
+      }
+
+      // Base receivers: POST /api/receivers, PATCH/DELETE /api/receivers/:id
+      if (parts[1] === 'receivers' && parts.length <= 3 && ['POST', 'PATCH', 'DELETE'].includes(req.method)) {
+        const id = parts[2] ? decodeURIComponent(parts[2]) : null;
+        let r;
+        if (req.method === 'POST' && !id) {
+          r = receiverStore.add(await readJson(req));
+          state.event('receiver.added', { receiver: r.id, name: r.name, by: user.email });
+        } else if (req.method === 'PATCH' && id) {
+          r = receiverStore.update(id, await readJson(req));
+          state.event('receiver.updated', { receiver: id, by: user.email });
+        } else if (req.method === 'DELETE' && id) {
+          receiverStore.remove(id);
+          state.receiverStatus.delete(id);
+          state.event('receiver.removed', { receiver: id, by: user.email });
+        } else {
+          return send(res, 404, { error: 'Not found' });
+        }
+        broadcast({ type: 'receivers', receivers: state.receiverViews() });
+        return send(res, 200, r ? state.receiverViews().find(x => x.id === r.id) : { ok: true });
       }
 
       // POST /api/receivers/:id/webui -> one-time link to the receiver's own web interface

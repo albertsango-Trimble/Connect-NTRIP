@@ -157,8 +157,13 @@ export class CasterState extends EventEmitter {
       id: r.id,
       name: r.name || r.id,
       model: r.model || '',
-      mountpoints: r.mountpoints,
+      mountpoints: r.mountpoints || [],
       webUi: !!r.webUrl,
+      // Shown to admins in the extension; the receiver password is never sent
+      webUrl: r.webUrl || '',
+      username: r.username || '',
+      hasPassword: !!r.password,
+      source: r.source || 'config',
       ...(this.receiverStatus.get(r.id) || { reachable: null }),
     }));
   }

@@ -577,8 +577,9 @@ function receiverStatus(r: Receiver) {
 }
 
 function renderReceivers() {
-  if (!app.receivers.length) return '';
-  return `<div class="section-title">Base receivers</div>${app.receivers
+  return `<div class="section-head"><div class="section-title">Base receivers</div><button class="link-btn" data-receiver-add>+ Add base receiver</button></div>${
+    app.receivers.length ? '' : '<div class="card-sub" style="padding:0 2px 4px">Add a base receiver to open its own web interface from here.</div>'
+  }${app.receivers
     .map((r) => {
       const st = receiverStatus(r);
       const mounts = app.mountpoints.filter((m) => r.mountpoints.includes(m.name));
@@ -589,8 +590,11 @@ function renderReceivers() {
           <div style="min-width:0"><div class="card-title">${esc(r.name)}</div>
             <div class="card-sub">${esc([r.model, mounts.length ? `${online}/${mounts.length} streams online` : ''].filter(Boolean).join(' · '))}</div></div>
         </div>
-        <div class="card-sub" style="margin-top:6px">${esc(st.text)}</div>
-        ${r.webUi ? `<div class="actions"><button class="primary-btn" data-webui="${esc(r.id)}">Open web UI</button><button class="ghost-btn" data-webui-tab="${esc(r.id)}">New tab</button></div>` : ''}
+        <div class="card-sub" style="margin-top:6px">${esc(st.text)}${r.webUrl ? ` · ${esc(r.webUrl)}` : ''}</div>
+        <div class="actions">
+          ${r.webUi ? `<button class="primary-btn" data-webui="${esc(r.id)}">Open web UI</button><button class="ghost-btn" data-webui-tab="${esc(r.id)}">New tab</button>` : ''}
+          ${r.source === 'extension' ? `<button class="link-btn" data-receiver-edit="${esc(r.id)}" style="margin-left:auto">Edit</button>` : '<span class="card-sub" style="margin-left:auto" title="Set in the caster\'s config file">server config</span>'}
+        </div>
       </div>`;
     })
     .join('')}<div class="section-title">Mountpoints</div>`;
@@ -599,7 +603,7 @@ function renderReceivers() {
 function renderBases() {
   const el = $('#tab-bases');
   if (!app.mountpoints.length) {
-    el.innerHTML = '<div class="empty">No mountpoints configured on the caster.</div>';
+    morph(el, `${renderReceivers()}<div class="empty">No bases connected yet.</div>`);
     return;
   }
   morph(el, renderReceivers() + app.mountpoints
@@ -695,6 +699,9 @@ function describe(ev: LogEvent) {
     case 'mountpoint.removed': return `Mountpoint ${ev.mount} removed by ${ev.by}`;
     case 'mountpoint.position_set': return `Position of ${ev.mount} set by ${ev.by}`;
     case 'mountpoint.position_cleared': return `Set position of ${ev.mount} cleared by ${ev.by}`;
+    case 'receiver.added': return `Base receiver ${ev.name || ev.receiver} added by ${ev.by}`;
+    case 'receiver.updated': return `${receiverName(String(ev.receiver))} updated by ${ev.by}`;
+    case 'receiver.removed': return `Base receiver ${ev.receiver} removed by ${ev.by}`;
     case 'webui.opened': return `${receiverName(String(ev.receiver))} web UI opened by ${ev.by}`;
     case 'receiver.reachable': return `${receiverName(String(ev.receiver))} web UI reachable again`;
     case 'receiver.unreachable': return `${receiverName(String(ev.receiver))} web UI not reachable${ev.reason ? ` (${ev.reason})` : ''}`;
@@ -807,6 +814,10 @@ function handleMessage(msg: CasterMessage) {
     if (app.log.length > 300) app.log.shift();
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
+  } else if (msg.type === 'receivers') {
+    app.receivers = msg.receivers;
+    renderBases();
+    renderMap();
   } else if (msg.type === 'mountpoints') {
     app.mountpoints = msg.mountpoints;
     renderBases();
@@ -1228,6 +1239,77 @@ document.addEventListener('click', (e) => {
   if (!t?.dataset.place) return;
   e.stopPropagation();
   openPlace(t.dataset.place, t.dataset.placeGroup?.split('|'));
+});
+
+// ------------------------------------------------------------------ add / edit base receivers
+const receiverDlg = $<HTMLDialogElement>('#receiverDlg');
+const receiverForm = $<HTMLFormElement>('#receiverForm');
+const rfield = (name: string) => receiverForm.elements.namedItem(name) as HTMLInputElement;
+let editingReceiver: string | null = null;
+
+function openReceiverForm(id: string | null) {
+  const r = id ? app.receivers.find((x) => x.id === id) : null;
+  editingReceiver = r?.id ?? null;
+  receiverForm.reset();
+  $('#receiverTitle').textContent = r ? `Edit ${r.name}` : 'Add base receiver';
+  rfield('rname').value = r?.name ?? '';
+  rfield('rmodel').value = r?.model ?? '';
+  rfield('rurl').value = r?.webUrl ?? '';
+  rfield('ruser').value = r?.username ?? '';
+  rfield('rpass').value = '';
+  rfield('rpass').placeholder = r?.hasPassword ? 'Saved (leave blank to keep)' : '';
+  const ticked = new Set(r?.mountpoints ?? []);
+  $('#receiverMounts').innerHTML = app.mountpoints.length
+    ? app.mountpoints.map((m) => `<label><input type="checkbox" value="${esc(m.name)}"${ticked.has(m.name) ? ' checked' : ''}> ${esc(m.name)} <span class="hint">${esc(m.format)}</span></label>`).join('')
+    : '<span class="hint">No mountpoints yet. Connect the base to the caster first, then tick its mountpoints here.</span>';
+  $('#receiverRemove').classList.toggle('hidden', !r);
+  $('#receiverMsg').textContent = '';
+  receiverDlg.showModal();
+}
+
+receiverForm.addEventListener('submit', async (e) => {
+  const submitter = (e as SubmitEvent).submitter as HTMLButtonElement | null;
+  if (submitter?.value !== 'save') return;
+  e.preventDefault();
+  const body: Record<string, unknown> = {
+    name: rfield('rname').value.trim(),
+    model: rfield('rmodel').value.trim(),
+    webUrl: rfield('rurl').value.trim(),
+    username: rfield('ruser').value.trim(),
+    mountpoints: [...$('#receiverMounts').querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value),
+  };
+  if (rfield('rpass').value) body.password = rfield('rpass').value; // blank keeps the saved password
+  const msg = $('#receiverMsg');
+  $<HTMLButtonElement>('#receiverSave').disabled = true;
+  try {
+    const saved = (await api(editingReceiver ? 'PATCH' : 'POST', editingReceiver ? `/api/receivers/${encodeURIComponent(editingReceiver)}` : '/api/receivers', body)) as unknown as Receiver;
+    app.receivers = [...app.receivers.filter((x) => x.id !== saved.id), saved];
+    receiverDlg.close();
+    renderBases();
+  } catch (err) {
+    msg.textContent = (err as Error).message;
+    msg.className = 'form-msg err';
+  } finally {
+    $<HTMLButtonElement>('#receiverSave').disabled = false;
+  }
+});
+$('#receiverRemove').addEventListener('click', async () => {
+  const r = app.receivers.find((x) => x.id === editingReceiver);
+  if (!r || !confirm(`Remove ${r.name}? Its corrections keep working; only the web UI link is removed.`)) return;
+  try {
+    await api('DELETE', `/api/receivers/${encodeURIComponent(r.id)}`);
+    app.receivers = app.receivers.filter((x) => x.id !== r.id);
+    receiverDlg.close();
+    renderBases();
+  } catch (err) {
+    $('#receiverMsg').textContent = (err as Error).message;
+    $('#receiverMsg').className = 'form-msg err';
+  }
+});
+document.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-receiver-add], [data-receiver-edit]');
+  if (!t) return;
+  openReceiverForm(t.dataset.receiverEdit ?? null);
 });
 
 // ------------------------------------------------------------------ online history
