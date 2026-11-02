@@ -301,7 +301,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
         const serial = normaliseSerial(decodeURIComponent(parts[2]));
         const start = Number(url.searchParams.get('start'));
         if (!Number.isSafeInteger(start)) throw new UserError('Which session? Give its start time');
-        return send(res, 200, { serial, start, points: state.trailFor(P, serial, start) });
+        return send(res, 200, { serial, start, points: await state.trailFor(P, serial, start) });
       }
 
       // GET /api/devices/:serial/history?days=30  (days=0 for everything kept)
@@ -432,7 +432,11 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
   });
 
   // ---------------------------------------------------------------- WebSocket feed (one project per socket)
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
+  // Updates are compressed: a project with hundreds of machines sends a lot of repetitive JSON every second
+  const wss = new WebSocketServer({
+    server, path: '/ws', maxPayload: 64 * 1024,
+    perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 4, memLevel: 7 }, serverNoContextTakeover: false, clientNoContextTakeover: true, concurrencyLimit: 4 },
+  });
   const authed = new Set();
 
   wss.on('connection', (ws, req) => {

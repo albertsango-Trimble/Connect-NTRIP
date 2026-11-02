@@ -1,3 +1,6 @@
+// Password checks run on Node's worker threads: give them one per CPU (at least 4). Must be set before any use.
+import os from 'node:os';
+process.env.UV_THREADPOOL_SIZE ||= String(Math.max(4, os.cpus().length));
 import { loadConfig } from './config.js';
 import { CasterState } from './state.js';
 import { startNtripServer } from './ntrip.js';
@@ -39,7 +42,7 @@ function shutdown() {
   ntrip.close();
   dash.close();
   webui?.close();
-  setTimeout(() => process.exit(0), 500).unref();
+  setTimeout(() => process.exit(0), 3000).unref(); // time for the last trail and history writes
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

@@ -277,7 +277,10 @@ const basemap = createBasemap(map, $('.map-wrap'), {
 });
 
 let mapReady = false;
-map.on('load', () => {
+// Start drawing once the map's style is ready, not when its first background tiles arrive ('load'): if the tile
+// server is slow or blocked (e.g. by a site firewall) bases and machines must still appear.
+const onMapReady = () => {
+  if (mapReady) return;
   map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({ id: 'trails-casing', type: 'line', source: 'trails', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 5, 'line-opacity': 0.8 } });
   map.addLayer({ id: 'trails', type: 'line', source: 'trails', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': ['get', 'colour'], 'line-width': 3, 'line-opacity': 0.85 } });
@@ -289,7 +292,10 @@ map.on('load', () => {
   mapReady = true;
   basemap.onLoad();
   renderMap();
-});
+};
+map.on('style.load', onMapReady);
+map.on('load', onMapReady);
+if (map.isStyleLoaded()) onMapReady();
 new ResizeObserver(() => map.resize()).observe(mapEl);
 // Elevations need the geoid grid and the project's coordinate system, which arrive a moment after start
 const redrawPositions = () => {
@@ -371,9 +377,42 @@ function openPopup(kind: 'rover' | 'base', id: string, lngLat: maplibregl.LngLat
   popup.setLngLat(lngLat).setHTML(html).addTo(map);
 }
 
+/** Machine names show unless turned off, or too many machines are in view to read them (zoom in to see them). */
+const MAX_LABELS = 40;
+function updateLabels() {
+  const on = $<HTMLInputElement>('#labelsToggle').checked;
+  let crowded = false;
+  if (on && app.rovers.size > MAX_LABELS && mapReady) {
+    const b = map.getBounds();
+    let n = 0;
+    for (const r of app.rovers.values()) {
+      const g = r.gga;
+      if (g?.hasPosition && b.contains([g.lon!, g.lat!]) && ++n > MAX_LABELS) { crowded = true; break; }
+    }
+  }
+  const wrap = mapEl.parentElement!;
+  wrap.classList.toggle('hide-labels', !on || crowded);
+  $('#labelsToggle').parentElement!.title = crowded ? `More than ${MAX_LABELS} machines in view: zoom in to see their names` : '';
+}
+map.on('moveend', () => updateLabels());
+
+const TRAIL_REDRAW_MS = 5000;
+let lastTrailDraw = 0;
+let trailsWereOn = true;
+/** The last `keep` points of a trail, spaced evenly through the older part so its shape stays. */
+function thin<T>(pts: T[], keep: number): T[] {
+  if (pts.length <= keep) return pts;
+  const recent = Math.min(pts.length, Math.ceil(keep / 3));
+  const older = pts.slice(0, pts.length - recent);
+  const step = older.length / (keep - recent);
+  const out: T[] = [];
+  for (let i = 0; i < older.length; i += step) out.push(older[Math.floor(i)]);
+  return [...out, ...pts.slice(pts.length - recent)];
+}
+
 function renderMap() {
   if (!mapReady) return;
-  mapEl.parentElement!.classList.toggle('hide-labels', !$<HTMLInputElement>('#labelsToggle').checked);
+  updateLabels();
 
   // Bases: one receiver usually feeds several mountpoints (RTCM, CMRx, CMR+), so mountpoints within ~2 m share one marker.
   const groups: { lat: number; lon: number; mounts: Mountpoint[] }[] = [];
@@ -428,14 +467,22 @@ function renderMap() {
   }
   for (const id of [...roverMarkers.keys()]) if (!app.rovers.has(id)) dropRover(id);
 
-  // Trails
+  // Trails. Redrawing every machine's trail is the most expensive thing on the page, so with many machines it is
+  // redrawn less often and with fewer points (hovering still uses every point).
   const showTrails = $<HTMLInputElement>('#trailsToggle').checked;
-  const features: GeoJSON.Feature[] = showTrails
-    ? [...app.rovers.values()]
-        .filter((r) => (r.track?.length ?? 0) > 1)
-        .map((r) => ({ type: 'Feature', properties: { colour: roverColour(r) }, geometry: { type: 'LineString', coordinates: r.track!.map((p) => [p[1], p[0]]) } }))
-    : [];
-  (map.getSource('trails') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  const many = app.rovers.size > 40;
+  const now = Date.now();
+  if (!showTrails || !many || now - lastTrailDraw >= TRAIL_REDRAW_MS || trailsWereOn !== showTrails) {
+    lastTrailDraw = now;
+    trailsWereOn = showTrails;
+    const keep = many ? Math.max(40, Math.round(12000 / app.rovers.size)) : Infinity; // ~12k points on the map at most
+    const features: GeoJSON.Feature[] = showTrails
+      ? [...app.rovers.values()]
+          .filter((r) => (r.track?.length ?? 0) > 1)
+          .map((r) => ({ type: 'Feature', properties: { colour: roverColour(r) }, geometry: { type: 'LineString', coordinates: thin(r.track!, keep).map((p) => [p[1], p[0]]) } }))
+      : [];
+    (map.getSource('trails') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  }
 
   // Frame the map automatically only until the person moves it, and only when something new appears
   if (!app.fitted) {
@@ -596,6 +643,16 @@ function projectCoords(p: { lat: number; lon: number; h: number | null }) {
 }
 
 /** Position lines for the Bases tab. */
+/** Drops a base position that isn't usable (missing or not a number), so one bad message can't break the page. */
+function cleanMounts(list: Mountpoint[]): Mountpoint[] {
+  for (const m of list) {
+    const p = m.position;
+    if (p && !(Number.isFinite(p.lat) && Number.isFinite(p.lon))) m.position = null;
+    if (m.position && m.position.h != null && !Number.isFinite(m.position.h)) m.position.h = null;
+  }
+  return list;
+}
+
 function positionLines(m: Mountpoint) {
   if (!m.position) return '';
   const c = projectCoords(m.position);
@@ -919,7 +976,7 @@ function handleMessage(msg: CasterMessage) {
     app.serverOffset = s.serverTime - Date.now();
     $('#casterName').textContent = s.casterName;
     $('#casterAddr').textContent = s.host ? `${s.host}:${s.ntripPort}` : `port ${s.ntripPort}`;
-    app.mountpoints = s.mountpoints;
+    app.mountpoints = cleanMounts(s.mountpoints);
     app.rovers = new Map(s.rovers.map((r) => [r.id, r]));
     app.log = s.log;
     logHasOlder = s.log.length >= 100;
@@ -933,7 +990,7 @@ function handleMessage(msg: CasterMessage) {
     renderAll();
   } else if (msg.type === 'tick') {
     app.serverOffset = msg.serverTime - Date.now();
-    app.mountpoints = msg.mountpoints;
+    app.mountpoints = cleanMounts(msg.mountpoints);
     if (msg.receivers) app.receivers = msg.receivers;
     const next = new Map<string, Rover>();
     for (const r of msg.rovers) next.set(r.id, { ...r, track: app.rovers.get(r.id)?.track || [] });
@@ -966,7 +1023,7 @@ function handleMessage(msg: CasterMessage) {
     renderBases();
     renderMap();
   } else if (msg.type === 'mountpoints') {
-    app.mountpoints = msg.mountpoints;
+    app.mountpoints = cleanMounts(msg.mountpoints);
     renderBases();
     renderMap();
   } else if (msg.type === 'devices') {

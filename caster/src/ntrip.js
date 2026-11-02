@@ -251,7 +251,7 @@ function attachSource(sock, req, m, protocol, rest, decoder, { config, state }) 
 }
 
 // ---------------------------------------------------------------- rovers
-function handleClient(sock, req, mount, rest, { config, state }) {
+async function handleClient(sock, req, mount, rest, { config, state }) {
   const m = findMountpoint(config, mount);
   if (!m) {
     // NTRIP 1 convention: unknown mountpoint gets the sourcetable
@@ -265,7 +265,14 @@ function handleClient(sock, req, mount, rest, { config, state }) {
   const devices = config.projects.devicesFor(project);
   const auth = basicAuth(req.headers);
   const serial = normaliseSerial(auth?.user);
-  const result = auth ? devices.authenticate(serial, auth.pass, mount) : { ok: false, reason: 'no credentials' };
+  let result;
+  try {
+    result = auth ? await devices.authenticate(serial, auth.pass, mount) : { ok: false, reason: 'no credentials' };
+  } catch (err) {
+    console.error(`Login check failed: ${err.message}`);
+    result = { ok: false, reason: 'login check failed' };
+  }
+  if (sock.destroyed) return; // gave up while the password was being checked
   if (!result.ok) {
     state.event('rover.rejected', { project, serial: serial || '(none)', mount, addr: req.addr, reason: result.reason });
     if (serial && devices.get(serial)) state.recordRejected(project, serial, { mount, addr: req.addr, reason: result.reason, agent: req.headers['user-agent'] || '' });

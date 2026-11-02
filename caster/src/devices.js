@@ -6,8 +6,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { seal, unseal } from './secrets.js';
 
-const SCRYPT = { N: 16384, r: 8, p: 1 };
+const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const KEYLEN = 32;
+const scryptAsync = (pw, salt, len) => new Promise((ok, fail) => crypto.scrypt(pw, salt, len, SCRYPT, (err, key) => (err ? fail(err) : ok(key))));
+// Remembers recent good logins (keyed with a secret that only lives in memory), so a machine that reconnects
+// doesn't pay for the slow password check again. A wrong password always gets the full check.
+const CACHE_KEY = crypto.randomBytes(32);
+const goodLogins = new Map(); // serial -> tag
+const loginTag = (serial, hash, pw) => crypto.createHmac('sha256', CACHE_KEY).update(`${serial}\0${hash}\0${pw}`).digest('base64');
 
 export function normaliseSerial(serial) {
   return String(serial || '').trim().toUpperCase();
@@ -48,6 +54,15 @@ function hashPassword(pw) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.scryptSync(pw, salt, KEYLEN, SCRYPT);
   return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+
+/** Same as checkPassword, but runs on Node's worker threads so the caster keeps forwarding data meanwhile. */
+async function checkPasswordAsync(pw, stored) {
+  const [alg, saltB64, hashB64] = String(stored).split('$');
+  if (alg !== 'scrypt') return false;
+  const expected = Buffer.from(hashB64, 'base64');
+  const actual = await scryptAsync(pw, Buffer.from(saltB64, 'base64'), expected.length);
+  return crypto.timingSafeEqual(expected, actual);
 }
 
 function checkPassword(pw, stored) {
@@ -168,12 +183,24 @@ export class DeviceStore {
     this.save();
   }
 
-  /** Returns { ok, reason, device } for an NTRIP login attempt. */
-  authenticate(serial, password, mountpoint) {
+  /** Resolves to { ok, reason, device } for an NTRIP login attempt. */
+  async authenticate(serial, password, mountpoint) {
     serial = normaliseSerial(serial);
     const d = this.devices[serial];
     if (!d) return { ok: false, reason: 'unknown serial' };
-    if (!checkPassword(password, d.hash)) return { ok: false, reason: 'bad password' };
+    const tag = loginTag(serial, d.hash, String(password));
+    if (goodLogins.get(serial) !== tag) {
+      // The encrypted copy (kept for emailing) is far quicker to compare than the scrypt hash, which matters when
+      // thousands of machines reconnect at once after a restart. Logins without one use the hash.
+      const kept = d.sealed ? unseal(d.sealed) : null;
+      const good = kept !== null
+        ? kept.length === String(password).length && crypto.timingSafeEqual(Buffer.from(kept), Buffer.from(String(password)))
+        : await checkPasswordAsync(String(password), d.hash);
+      if (!good) return { ok: false, reason: 'bad password' };
+      if (goodLogins.size > 100_000) goodLogins.clear();
+      goodLogins.set(serial, tag);
+    }
+    if (this.devices[serial] !== d) return { ok: false, reason: 'login changed' };
     if (!d.enabled) return { ok: false, reason: 'device disabled' };
     if (d.mountpoints.length && !d.mountpoints.includes(mountpoint)) {
       return { ok: false, reason: `not allowed on ${mountpoint}` };

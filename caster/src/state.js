@@ -82,7 +82,8 @@ export class CasterState extends EventEmitter {
     Object.assign(client, {
       connectedAt: Date.now(), bytesOut: 0, lastBytes: 0, rateBps: 0,
       gga: null, ggaAt: null, track: [], fixMs: {}, firstPos: null,
-      trail: { buf: [], last: null, points: 0, flushedAt: Date.now() },
+      // Trails are saved every TRAIL_FLUSH_MS, each machine at its own moment so the writes are spread out
+      trail: { buf: [], last: null, points: 0, flushedAt: Date.now() - Math.random() * TRAIL_FLUSH_MS },
     });
     this.clients.set(client.id, client);
     this.event('rover.connected', {
@@ -96,7 +97,9 @@ export class CasterState extends EventEmitter {
     reason = client.endReason || reason;
     this.event('rover.disconnected', { project: client.project, id: client.id, serial: client.serial, mount: client.mount, reason });
     this.flushTrail(client);
-    this.projects?.historyFor(client.project).append(client.serial, this.sessionRecord(client, reason));
+    const history = this.projects?.historyFor(client.project);
+    history?.append(client.serial, this.sessionRecord(client, reason));
+    history?.compressTrack(client.serial, client.connectedAt);
   }
 
   /** Adds the time since the last GGA to the fix type it reported (gaps over 30 s count as no position). */
@@ -180,8 +183,9 @@ export class CasterState extends EventEmitter {
   }
 
   /** A session's trail, including points not yet written for a machine that is still connected. */
-  trailFor(project, serial, start) {
+  async trailFor(project, serial, start) {
     const history = this.projects.historyFor(project);
+    await history.settled(serial, start);
     const points = history.readTrack(serial, start);
     for (const c of this.clients.values()) {
       if (c.project === project && c.serial === serial && c.connectedAt === Number(start)) points.push(...c.trail.buf);

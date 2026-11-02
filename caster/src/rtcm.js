@@ -56,6 +56,9 @@ export function decodeStationPosition(payload) {
   const y = getBitsS(payload, 74, 38) * 0.0001;
   const z = getBitsS(payload, 114, 38) * 0.0001;
   const antennaHeight = type === 1006 ? getBitsU(payload, 152, 16) * 0.0001 : null;
+  // Ignore positions that aren't on the Earth's surface (an empty or corrupt message)
+  const r = Math.hypot(x, y, z);
+  if (!(r > 6.30e6 && r < 6.42e6)) return null;
   return { stationId, ecef: { x, y, z }, antennaHeight, ...ecefToLla(x, y, z) };
 }
 
@@ -82,7 +85,7 @@ export class RtcmMonitor {
         const type = getBitsU(payload, 0, 12);
         this.types.set(type, (this.types.get(type) || 0) + 1);
         this.frames++;
-        if (type === 1005 || type === 1006) this.station = decodeStationPosition(payload);
+        if (type === 1005 || type === 1006) this.station = decodeStationPosition(payload) || this.station;
         i = s + total;
       } else {
         i = s + 1;
