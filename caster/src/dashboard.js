@@ -160,6 +160,22 @@ export function startDashboard({ config, state, devices, tokens, history }) {
         }
       }
 
+      // PUT /api/mountpoints/:name/position {lat, lon, h?}   DELETE /api/mountpoints/:name/position
+      if (parts[1] === 'mountpoints' && parts[2] && parts[3] === 'position' && (req.method === 'PUT' || req.method === 'DELETE')) {
+        const name = decodeURIComponent(parts[2]);
+        const m = config.mountpoints.find(x => x.name === name);
+        if (!m) return send(res, 404, { error: `Mountpoint ${name} not found` });
+        if (req.method === 'DELETE') {
+          state.positions.clear(name);
+          state.event('mountpoint.position_cleared', { mount: name, by: user.email });
+        } else {
+          const p = state.positions.set(name, await readJson(req), user.email);
+          state.event('mountpoint.position_set', { mount: name, by: user.email, lat: p.lat, lon: p.lon });
+        }
+        broadcast({ type: 'mountpoints', mountpoints: config.mountpoints.map(x => state.sourceView(x)) });
+        return send(res, 200, state.sourceView(m));
+      }
+
       // DELETE /api/mountpoints/:name  (only mountpoints a base created, and only while it is offline)
       if (req.method === 'DELETE' && parts[1] === 'mountpoints' && parts[2]) {
         const name = decodeURIComponent(parts[2]);
@@ -191,7 +207,7 @@ export function startDashboard({ config, state, devices, tokens, history }) {
 
       return send(res, 404, { error: 'Not found' });
     } catch (err) {
-      if (err instanceof UserError) return send(res, err.status, { error: err.message });
+      if (err instanceof UserError || (err.status && err.status < 500)) return send(res, err.status, { error: err.message });
       console.error(err);
       return send(res, 500, { error: 'Server error' });
     }

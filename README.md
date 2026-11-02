@@ -61,6 +61,8 @@ Logs: `journalctl -u connect-ntrip -f`. To update the caster to the latest versi
 
 With `autoMountpoints` on (it is in the example config), you don't need to set up mountpoints on the caster at all. In the receiver's NTRIP output, type **any mountpoint name you like** and use the shared `autoMountpoints.sourcePassword`. The caster creates the mountpoint when the base connects, and works out the format from the data: RTCM 3, CMR+ or CMRx. The base's position comes from the base's own data: RTCM 1005/1006, or CMR message Type 1 (reference station coordinates, decoded per Trimble's CMR specification). Streams without either, such as CMRx, take it from another stream the same base is sending. NTRIP 2 bases that send an `Ntrip-STR` header can also supply it.
 
+**Bases with no position in their data** (for example CMRx only): in the Bases tab click **Set position**, then click the base's spot on the map, drag the pin, or type its latitude/longitude (or easting/northing in the Connect project's coordinate system). You can apply the same position to the base's other mountpoints in one go. A position set by hand is used whenever the base's own data doesn't give one; RTCM 1005/1006, CMR Type 1 or another stream from the same base still take priority while it is sending.
+
 These mountpoints show as **Set by base** in the Bases tab, appear in the sourcetable while the base is sending, and are remembered for rover logins and history. Once a base stops sending to one, you can remove it from the Bases tab. Configured mountpoints (below) still use their own passwords; the shared password can't take them over.
 
 ### Or configure them yourself

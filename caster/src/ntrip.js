@@ -104,10 +104,11 @@ function buildSourcetable({ config, state }) {
   const lines = [];
   for (const m of config.mountpoints) {
     if (m.auto && !state?.sources.has(m.name)) continue; // a base's own mountpoint is listed while it is sending
+    const pos = state?.position(m) || { lat: m.lat ?? 0, lon: m.lon ?? 0 };
     lines.push([
       'STR', m.name, m.identifier || m.name, m.format, m.formatDetails || '', m.carrier ?? 2,
       m.navSystem || 'GPS', m.network || config.casterName || 'Connect-NTRIP', m.country || config.country || '',
-      (m.lat ?? 0).toFixed(2), (m.lon ?? 0).toFixed(2), 1, 0, m.generator || 'Trimble', 'none', 'B', 'N',
+      pos.lat.toFixed(2), pos.lon.toFixed(2), 1, 0, m.generator || 'Trimble', 'none', 'B', 'N',
       m.bitrate || 9600, m.misc || '',
     ].join(';'));
   }

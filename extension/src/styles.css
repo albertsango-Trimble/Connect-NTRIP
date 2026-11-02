@@ -284,3 +284,23 @@ dialog input { width: 100%; }
   .two { grid-template-columns: 1fr; }
 }
 .history-tools label { white-space: nowrap; }
+
+/* set base position */
+.place { position: absolute; top: 56px; left: 50%; transform: translateX(-50%); z-index: 850; width: min(420px, calc(100% - 24px)); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.28); padding: 12px 14px; font-size: 13px; }
+.place-head { display: flex; align-items: center; gap: 8px; }
+.place-head b { font-size: 15px; margin-right: auto; }
+.place-hint { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+.place-mode { display: flex; gap: 14px; margin-bottom: 6px; }
+.place-mode label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.place-fields { display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 8px; }
+.place-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); min-width: 0; }
+.place-fields input { width: 100%; font-variant-numeric: tabular-nums; }
+.place-apply { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0; font-size: 12px; }
+.place-apply:empty { display: none; }
+.place-apply label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.place-apply .k { width: 100%; color: var(--muted); }
+.place-pin { width: 26px; height: 34px; cursor: grab; filter: drop-shadow(0 2px 3px rgba(0,0,0,.45)); }
+.place-pin:active { cursor: grabbing; }
+.placing .maplibregl-canvas { cursor: crosshair; }
+@media (max-width: 520px) { .place-fields { grid-template-columns: 1fr 1fr; } }
+.place-mode[hidden] { display: none; }

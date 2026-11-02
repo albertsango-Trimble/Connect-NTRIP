@@ -6,7 +6,7 @@ import { baseStyle, createBasemap } from './map/basemap';
 import { connectToHost, type HostConnection } from './connect/workspace';
 import { ProjectFiles } from './connect/projectFiles';
 import { RangeClient } from './core/geotiffTiles';
-import { initGeoreference } from './core/geo';
+import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, toProject } from './core/geo';
 import { chooseSource } from './ui/sourceDialog';
 import { loadShared, loadSharedPicture, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord } from './types';
@@ -397,7 +397,8 @@ function basePopup(key: string) {
   const receiver = app.receivers.find((r) => r.webUi && r.mountpoints.some((m) => names.includes(m)));
   return `<b>${esc(receiver?.name || 'Base station')}</b>${receiver?.model ? `<div style="color:#6a6e79;font-size:12px">${esc(receiver.model)}</div>` : ''}<table>${rows}
     ${best?.position ? `<tr><td>Position</td><td>${best.position.lat.toFixed(7)}, ${best.position.lon.toFixed(7)}<br><small>from ${esc(best.position.from)}</small></td></tr>` : ''}
-  </table>${receiver ? `<button class="popup-btn" data-webui="${esc(receiver.id)}">Open receiver web UI</button>` : ''}`;
+  </table>${receiver ? `<button class="popup-btn" data-webui="${esc(receiver.id)}">Open receiver web UI</button>` : ''}
+  <button class="popup-btn" style="background:none;color:var(--brand);border:1px solid var(--line)" data-place="${esc(names[0])}" data-place-group="${esc(names.join('|'))}">Set position</button>`;
 }
 
 function dropRover(id: string) {
@@ -537,7 +538,12 @@ function renderBases() {
       ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''})</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
-      ${m.auto && !m.online ? `<div class="actions" style="margin-top:6px"><button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button></div>` : ''}
+      ${m.manualPosition && m.position?.from !== 'set by hand' ? `<div class="card-sub" style="margin-top:4px">Position set by hand is on standby: the base's data gives the position while it is sending.</div>` : ''}
+      ${!m.position ? '<div class="warn">No position: this base isn\'t on the map. Use <b>Set position</b> to place it.</div>' : ''}
+      <div class="actions" style="margin-top:6px">
+        <button class="link-btn" data-place="${esc(m.name)}">${m.manualPosition ? 'Change set position' : 'Set position'}</button>
+        ${m.auto && !m.online ? `<button class="link-btn danger" data-remove-mount="${esc(m.name)}">Remove mountpoint</button>` : ''}
+      </div>
     </div>`,
     )
     .join(''));
@@ -601,6 +607,8 @@ function describe(ev: LogEvent) {
     case 'device.updated': return `Login ${ev.serial} updated (${((ev.fields as string[]) || []).join(', ')}) by ${ev.by}`;
     case 'device.removed': return `Login ${ev.serial} deleted by ${ev.by}`;
     case 'mountpoint.removed': return `Mountpoint ${ev.mount} removed by ${ev.by}`;
+    case 'mountpoint.position_set': return `Position of ${ev.mount} set by ${ev.by}`;
+    case 'mountpoint.position_cleared': return `Set position of ${ev.mount} cleared by ${ev.by}`;
     case 'webui.opened': return `${receiverName(String(ev.receiver))} web UI opened by ${ev.by}`;
     case 'receiver.reachable': return `${receiverName(String(ev.receiver))} web UI reachable again`;
     case 'receiver.unreachable': return `${receiverName(String(ev.receiver))} web UI not reachable${ev.reason ? ` (${ev.reason})` : ''}`;
@@ -713,6 +721,10 @@ function handleMessage(msg: CasterMessage) {
     if (app.log.length > 300) app.log.shift();
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
+  } else if (msg.type === 'mountpoints') {
+    app.mountpoints = msg.mountpoints;
+    renderBases();
+    renderMap();
   } else if (msg.type === 'devices') {
     app.devices = msg.devices;
     renderDevices();
@@ -941,6 +953,195 @@ document.addEventListener('click', async (e) => {
   } catch (err) {
     alert((err as Error).message);
   }
+});
+
+// ------------------------------------------------------------------ set base position by hand
+const placePanel = $('#placePanel');
+const placeA = $<HTMLInputElement>('#placeA');
+const placeB = $<HTMLInputElement>('#placeB');
+const placeH = $<HTMLInputElement>('#placeH');
+let placing: { mounts: string[]; marker: maplibregl.Marker | null } | null = null;
+
+const placeModeEN = () => (document.querySelector<HTMLInputElement>('input[name=placeMode]:checked')?.value ?? 'll') === 'en';
+function placeMsg(text: string, ok = false) {
+  const m = $('#placeMsg');
+  m.textContent = text;
+  m.className = `form-msg ${ok ? 'ok' : 'err'}`;
+}
+function setPlaceLabels() {
+  const en = placeModeEN();
+  $('#placeLabelA').textContent = en ? 'Easting (m)' : 'Latitude';
+  $('#placeLabelB').textContent = en ? 'Northing (m)' : 'Longitude';
+  placeA.placeholder = en ? '320785.37' : '-37.8136';
+  placeB.placeholder = en ? '5812835.75' : '144.9631';
+}
+/** The project's coordinate system, when Connect gives one, lets positions be typed as easting/northing. */
+function refreshPlaceModes() {
+  const crs = getEpsgCode();
+  $('#placeMode').hidden = !crs;
+  $('#placeCrsName').textContent = crs ? `Easting / Northing (${getProjectCrsName() || crs})` : 'Easting / Northing';
+  if (!crs) (document.querySelector<HTMLInputElement>('input[name=placeMode][value=ll]')!).checked = true;
+  setPlaceLabels();
+}
+onGeoChange(refreshPlaceModes);
+
+/** Reads the typed fields as [lon, lat]; a pasted "lat, lon" in the first box is split too. */
+function placeFromInputs(): [number, number] | null {
+  let a = placeA.value.trim();
+  let b = placeB.value.trim();
+  const both = a.split(/[\s,;]+/).filter(Boolean);
+  if (!b && both.length === 2) {
+    [a, b] = both;
+    placeA.value = a;
+    placeB.value = b;
+  }
+  const x = Number(a), y = Number(b);
+  if (!a || !b || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (placeModeEN()) {
+    const ll = fromProject(x, y);
+    return ll && Number.isFinite(ll[0]) && Math.abs(ll[1]) <= 90 ? ll : null;
+  }
+  return Math.abs(x) <= 90 && Math.abs(y) <= 180 ? [y, x] : null;
+}
+function writeInputs(lon: number, lat: number) {
+  if (placeModeEN()) {
+    const en = toProject(lon, lat);
+    if (en) {
+      placeA.value = en[0].toFixed(3);
+      placeB.value = en[1].toFixed(3);
+      return;
+    }
+  }
+  placeA.value = lat.toFixed(7);
+  placeB.value = lon.toFixed(7);
+}
+function placePin(lon: number, lat: number) {
+  if (!placing) return;
+  if (!placing.marker) {
+    const el = document.createElement('div');
+    el.innerHTML = `<svg class="place-pin" viewBox="0 0 26 34"><path d="M13 1C6.4 1 1 6.3 1 12.8 1 21.6 13 33 13 33s12-11.4 12-20.2C25 6.3 19.6 1 13 1Z" fill="${css('--base')}" stroke="#fff" stroke-width="2"/><circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>`;
+    placing.marker = new maplibregl.Marker({ element: el, anchor: 'bottom', draggable: true }).setLngLat([lon, lat]).addTo(map);
+    placing.marker.on('drag', () => {
+      const p = placing?.marker?.getLngLat();
+      if (p) writeInputs(p.lng, p.lat);
+    });
+  } else {
+    placing.marker.setLngLat([lon, lat]);
+  }
+}
+
+function openPlace(name: string, group?: string[]) {
+  closePlace();
+  const m = app.mountpoints.find((x) => x.name === name);
+  if (!m) return;
+  closeWebUi();
+  popup.remove();
+  placing = { mounts: [name], marker: null };
+  $('#placeTitle').textContent = `Set position — ${name}`;
+  refreshPlaceModes();
+  placeH.value = m.manualPosition?.h != null ? String(m.manualPosition.h) : '';
+  // Other mountpoints of the same base can take the same position: same receiver, same address, or the same marker
+  const receiver = app.receivers.find((r) => r.mountpoints.includes(name));
+  const sameBase = (o: Mountpoint) =>
+    (group?.includes(o.name) ?? false) || (receiver?.mountpoints.includes(o.name) ?? false) ||
+    (!!m.addr && !!o.addr && o.addr.replace(/:\d+$/, '') === m.addr.replace(/:\d+$/, ''));
+  const others = app.mountpoints.filter((o) => o.name !== name);
+  $('#placeApply').innerHTML = others.length
+    ? `<span class="k">Also set for:</span>${others
+        .map((o) => `<label><input type="checkbox" value="${esc(o.name)}"${sameBase(o) ? ' checked' : ''}> ${esc(o.name)}</label>`)
+        .join('')}`
+    : '';
+  $('#placeClear').classList.toggle('hidden', !m.manualPosition);
+  placeMsg('');
+  const start = m.manualPosition || m.position;
+  if (start) {
+    writeInputs(start.lon, start.lat);
+    placePin(start.lon, start.lat);
+    map.easeTo({ center: [start.lon, start.lat], zoom: Math.max(map.getZoom(), 16), duration: 400 });
+  } else {
+    placeA.value = '';
+    placeB.value = '';
+  }
+  placePanel.classList.remove('hidden');
+  mapEl.parentElement!.classList.add('placing');
+  (start ? placeH : placeA).focus();
+}
+
+function closePlace() {
+  placing?.marker?.remove();
+  placing = null;
+  placePanel.classList.add('hidden');
+  mapEl.parentElement?.classList.remove('placing');
+}
+
+map.on('click', (e) => {
+  if (!placing) return;
+  writeInputs(e.lngLat.lng, e.lngLat.lat);
+  placePin(e.lngLat.lng, e.lngLat.lat);
+  placeMsg('');
+});
+for (const input of [placeA, placeB]) {
+  input.addEventListener('change', () => {
+    const ll = placeFromInputs();
+    if (ll) {
+      placePin(ll[0], ll[1]);
+      map.easeTo({ center: ll, duration: 300 });
+      placeMsg('');
+    } else if (placeA.value && placeB.value) {
+      placeMsg(placeModeEN() ? 'Those don\'t look like easting and northing in the project\'s coordinate system.' : 'Latitude must be -90 to 90 and longitude -180 to 180, in decimal degrees.');
+    }
+  });
+}
+document.querySelectorAll<HTMLInputElement>('input[name=placeMode]').forEach((r) =>
+  r.addEventListener('change', () => {
+    const p = placing?.marker?.getLngLat();
+    setPlaceLabels();
+    if (p) writeInputs(p.lng, p.lat);
+    else {
+      placeA.value = '';
+      placeB.value = '';
+    }
+  }),
+);
+
+$('#placeClose').addEventListener('click', closePlace);
+$('#placeSave').addEventListener('click', async () => {
+  if (!placing) return;
+  const ll = placeFromInputs() ?? (placing.marker ? ([placing.marker.getLngLat().lng, placing.marker.getLngLat().lat] as [number, number]) : null);
+  if (!ll) return placeMsg('Click the map to place the base, or type its coordinates.');
+  const h = placeH.value.trim();
+  if (h && !Number.isFinite(Number(h))) return placeMsg('Height must be a number of metres, or left empty.');
+  const names = [placing.mounts[0], ...[...$('#placeApply').querySelectorAll<HTMLInputElement>('input:checked')].map((i) => i.value)];
+  $<HTMLButtonElement>('#placeSave').disabled = true;
+  try {
+    for (const n of names) await api('PUT', `/api/mountpoints/${encodeURIComponent(n)}/position`, { lat: ll[1], lon: ll[0], h: h === '' ? null : Number(h) });
+    closePlace();
+    app.fitted = true;
+  } catch (err) {
+    placeMsg(`Couldn't save: ${(err as Error).message}`);
+  } finally {
+    $<HTMLButtonElement>('#placeSave').disabled = false;
+  }
+});
+$('#placeClear').addEventListener('click', async () => {
+  if (!placing) return;
+  const name = placing.mounts[0];
+  if (!confirm(`Clear the position set by hand for ${name}?`)) return;
+  try {
+    await api('DELETE', `/api/mountpoints/${encodeURIComponent(name)}/position`);
+    closePlace();
+  } catch (err) {
+    placeMsg(`Couldn't clear: ${(err as Error).message}`);
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && placing && !document.querySelector('dialog[open]')) closePlace();
+});
+document.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-place]');
+  if (!t?.dataset.place) return;
+  e.stopPropagation();
+  openPlace(t.dataset.place, t.dataset.placeGroup?.split('|'));
 });
 
 // ------------------------------------------------------------------ online history

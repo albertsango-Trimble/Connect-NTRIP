@@ -226,12 +226,28 @@ export class CasterState extends EventEmitter {
       bytesIn: s?.bytesIn || 0,
       rateBps: s?.rateBps || 0,
       messageTypes: s?.monitor ? s.monitor.messageTypes() : [],
-      position: station
-        ? { lat: station.lat, lon: station.lon, h: station.h, stationId: station.stationId, antennaHeight: station.antennaHeight, accuracy: station.accuracy, from: station.from }
-        : site ? { lat: site.lat, lon: site.lon, h: site.h ?? null, from: site.from }
-        : (m.lat != null && m.lon != null ? { lat: m.lat, lon: m.lon, h: m.h ?? null, from: m.auto ? `${m.positionFrom || 'last known'}` : 'config' } : null),
+      position: this.position(m, station, site),
+      manualPosition: this.positions?.get(m.name) || null,
       rovers: [...this.clients.values()].filter(c => c.mount === m.name).length,
     };
+  }
+
+  /**
+   * Where the base is, best source first: the base's own data (RTCM 1005/1006, CMR Type 1), another stream
+   * the same base is sending now, a position set by hand in the extension, then what was last known or configured.
+   */
+  position(m, station, site) {
+    if (station === undefined) {
+      const s = this.sources.get(m.name);
+      station = s?.monitor?.station;
+      site = !station && s ? this.sitePosition(s) : null;
+    }
+    if (station) return { lat: station.lat, lon: station.lon, h: station.h, stationId: station.stationId, antennaHeight: station.antennaHeight, accuracy: station.accuracy, from: station.from };
+    if (site) return { lat: site.lat, lon: site.lon, h: site.h ?? null, from: site.from };
+    const manual = this.positions?.get(m.name);
+    if (manual) return { lat: manual.lat, lon: manual.lon, h: manual.h, from: 'set by hand', by: manual.by, at: manual.at };
+    if (m.lat != null && m.lon != null) return { lat: m.lat, lon: m.lon, h: m.h ?? null, from: m.auto ? `${m.positionFrom || 'last known'}` : 'config' };
+    return null;
   }
 
   clientView(c, withTrack = false) {

@@ -32,6 +32,30 @@
         <label><input type="checkbox" id="labelsToggle" checked> Labels</label>
         <button id="fitBtn" class="small-btn">Fit all</button>
       </div>
+      <div class="place hidden" id="placePanel" role="dialog" aria-label="Set base position">
+        <div class="place-head">
+          <b id="placeTitle">Set base position</b>
+          <button class="icon-btn" id="placeClose" title="Cancel" aria-label="Cancel">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <p class="place-hint">Click the base's location on the map or drag the pin, or type its coordinates.</p>
+        <div class="place-mode" id="placeMode" hidden>
+          <label><input type="radio" name="placeMode" value="ll" checked> Lat / Lon</label>
+          <label><input type="radio" name="placeMode" value="en"> <span id="placeCrsName">Easting / Northing</span></label>
+        </div>
+        <div class="place-fields">
+          <label><span id="placeLabelA">Latitude</span><input id="placeA" inputmode="decimal" autocomplete="off" placeholder="-37.8136"></label>
+          <label><span id="placeLabelB">Longitude</span><input id="placeB" inputmode="decimal" autocomplete="off" placeholder="144.9631"></label>
+          <label>Height (m, optional)<input id="placeH" inputmode="decimal" autocomplete="off"></label>
+        </div>
+        <div class="place-apply" id="placeApply"></div>
+        <div class="form-actions">
+          <button class="primary-btn" id="placeSave">Save position</button>
+          <button class="ghost-btn hidden" id="placeClear">Clear set position</button>
+        </div>
+        <p class="form-msg" id="placeMsg"></p>
+      </div>
       <div class="webui hidden" id="webuiPanel" role="dialog" aria-label="Base receiver web interface">
         <div class="webui-bar">
           <svg viewBox="0 0 30 30" class="webui-icon" aria-hidden="true"><path d="M15 3 27 26H3Z" fill="currentColor"/><circle cx="15" cy="18" r="3" fill="#fff"/></svg>

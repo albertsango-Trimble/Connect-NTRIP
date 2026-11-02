@@ -51,7 +51,9 @@ export interface Mountpoint {
   bytesIn: number;
   rateBps: number;
   messageTypes: number[];
-  position: { lat: number; lon: number; h: number | null; stationId?: number; antennaHeight?: number | null; accuracy?: string; from: string } | null;
+  position: { lat: number; lon: number; h: number | null; stationId?: number; antennaHeight?: number | null; accuracy?: string; from: string; by?: string; at?: string } | null;
+  /** Position set by hand in the extension (used when the base's data doesn't give one) */
+  manualPosition?: { lat: number; lon: number; h: number | null; by: string; at: string } | null;
   rovers: number;
 }
 
@@ -155,4 +157,5 @@ export type CasterMessage =
   | { type: 'hello'; user: { email: string; name: string }; snapshot: Snapshot; devices: Device[] }
   | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[]; receivers?: Receiver[] }
   | { type: 'event'; event: LogEvent }
-  | { type: 'devices'; devices: Device[] };
+  | { type: 'devices'; devices: Device[] }
+  | { type: 'mountpoints'; mountpoints: Mountpoint[] };
