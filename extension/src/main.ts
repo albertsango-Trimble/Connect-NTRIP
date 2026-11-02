@@ -83,6 +83,8 @@ const app = {
   log: [] as LogEvent[],
   selected: null as string | null,
   fitted: false,
+  /** How many things were on the map when it was last framed automatically */
+  framedCount: 0,
   editing: null as string | null,
 };
 let projectFiles: ProjectFiles | null = null;
@@ -253,6 +255,12 @@ map.on('load', () => {
   renderMap();
 });
 new ResizeObserver(() => map.resize()).observe(mapEl);
+// Once the person pans, zooms or turns the map, leave it where they put it
+for (const ev of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'] as const) {
+  map.on(ev, (e: { originalEvent?: Event }) => {
+    if (e.originalEvent) app.fitted = true;
+  });
+}
 
 const baseMarkers = new Map<string, { marker: maplibregl.Marker; online: boolean; label: string }>();
 const roverMarkers = new Map<string, { marker: maplibregl.Marker; key: string; label: string }>();
@@ -386,7 +394,14 @@ function renderMap() {
     : [];
   (map.getSource('trails') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
 
-  if (!app.fitted) fitAll(true);
+  // Frame the map automatically only until the person moves it, and only when something new appears
+  if (!app.fitted) {
+    const count = app.mountpoints.filter((m) => m.position).length + [...app.rovers.values()].filter((r) => r.gga?.hasPosition).length;
+    if (count > app.framedCount) {
+      app.framedCount = count;
+      fitAll(true);
+    }
+  }
 }
 
 function basePopup(key: string) {
@@ -413,7 +428,6 @@ function fitAll(auto: boolean) {
   for (const r of app.rovers.values()) if (r.gga?.hasPosition) pts.push([r.gga.lon!, r.gga.lat!]);
   if (!pts.length) return;
   // Wait for the first machine positions before settling the automatic framing.
-  if (auto && [...app.rovers.values()].some((r) => r.gga?.hasPosition)) app.fitted = true;
   if (pts.length === 1) map.jumpTo({ center: pts[0], zoom: 17 });
   else {
     const b = new maplibregl.LngLatBounds(pts[0], pts[0]);
@@ -486,6 +500,19 @@ function renderRovers() {
     .join(''));
 }
 
+/** "MSM4: GPS, GLONASS, Galileo, QZSS, BeiDou" from the RTCM message numbers a base is sending. */
+const MSM_SYSTEMS: [number, string][] = [[1070, 'GPS'], [1080, 'GLONASS'], [1090, 'Galileo'], [1100, 'SBAS'], [1110, 'QZSS'], [1120, 'BeiDou'], [1130, 'NavIC']];
+function msmSummary(types: number[]) {
+  const byLevel = new Map<number, string[]>();
+  for (const t of types) {
+    const sys = MSM_SYSTEMS.find(([base]) => t > base && t <= base + 7);
+    if (!sys) continue;
+    const level = t - sys[0];
+    byLevel.set(level, [...(byLevel.get(level) || []), sys[1]]);
+  }
+  return [...byLevel.entries()].sort((a, b) => a[0] - b[0]).map(([lvl, systems]) => `MSM${lvl}: ${systems.join(', ')}`).join(' · ');
+}
+
 function receiverStatus(r: Receiver) {
   if (r.reachable === null || r.reachable === undefined) return { cls: 'stale', text: 'Checking…' };
   return r.reachable ? { cls: 'online', text: 'Web UI reachable' } : { cls: 'offline', text: `Web UI not reachable${r.error ? ` (${r.error})` : ''}` };
@@ -536,6 +563,7 @@ function renderBases() {
         <div><span>Last data</span><b>${m.lastDataAt ? `${duration(serverNow() - m.lastDataAt)} ago` : '—'}</b></div>
       </div>
       ${m.position ? `<div class="card-sub" style="margin-top:6px">${m.position.lat.toFixed(7)}, ${m.position.lon.toFixed(7)}${m.position.h != null ? `, ${m.position.h.toFixed(3)} m` : ''} (${esc(m.position.from)}${m.position.accuracy ? `, ±${esc(m.position.accuracy)}` : ''})</div>` : ''}
+      ${m.messageTypes?.length && msmSummary(m.messageTypes) ? `<div class="card-sub" style="margin-top:6px">${esc(msmSummary(m.messageTypes))}</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}
       ${m.online ? `<div class="card-sub" style="margin-top:4px">${esc(m.protocol)} from ${esc(m.addr)}</div>` : ''}
       ${m.manualPosition && m.position?.from !== 'set by hand' ? `<div class="card-sub" style="margin-top:4px">Position set by hand is on standby: the base's data gives the position while it is sending.</div>` : ''}
@@ -1292,6 +1320,7 @@ dlg.addEventListener('close', () => {
   store('casterUrl', sfield('casterUrl').value.trim());
   store('devToken', sfield('devToken').value.trim());
   app.fitted = false;
+  app.framedCount = 0;
   app.retry = 0;
   connect();
 });

@@ -57,6 +57,24 @@ export function decodeCmrType1(data) {
   return null;
 }
 
+// RTCM 3 message numbers that identify the standard's version and the MSM level.
+// MSM blocks: GPS 1071-77, GLONASS 1081-87, Galileo 1091-97, SBAS 1101-07, QZSS 1111-17, BeiDou 1121-27, NavIC 1131-37;
+// the last digit is the MSM level (MSM1-MSM7).
+// Messages added in RTCM 3.3 (10403.3): QZSS, BeiDou and NavIC MSM (1111-1137) and ephemerides 1041/1042/1044/1046.
+const RTCM33 = new Set([1041, 1042, 1044, 1046]);
+export const isMsm = t => t >= 1071 && t <= 1137 && t % 10 >= 1 && t % 10 <= 7;
+
+/** e.g. "RTCM 3.3 · MSM4", worked out from the message types seen. */
+export function rtcmLabel(types) {
+  const msm = types.filter(isMsm);
+  let version;
+  if (types.some(t => RTCM33.has(t) || (isMsm(t) && t >= 1111))) version = '3.3';
+  else if (msm.length || types.includes(1230)) version = '3.2';
+  else version = '3.x';
+  const levels = [...new Set(msm.map(t => t % 10))].sort();
+  return `RTCM ${version}${levels.length ? ` · MSM${levels.join('/')}` : ''}`;
+}
+
 export class FormatMonitor {
   constructor() {
     this.rtcm = new RtcmMonitor();
@@ -111,9 +129,7 @@ export class FormatMonitor {
   /** The format name, or null until enough frames have been seen. */
   detected() {
     if (this.rtcm.frames >= MIN_FRAMES && this.rtcm.frames >= this.cmrFrames) {
-      const types = this.rtcm.messageTypes();
-      const msm = types.some(t => (t >= 1071 && t <= 1137));
-      return msm ? 'RTCM 3.2' : 'RTCM 3';
+      return rtcmLabel(this.rtcm.messageTypes());
     }
     if (this.cmrFrames >= MIN_FRAMES) {
       const [type] = [...this.cmr.entries()].sort((a, b) => b[1] - a[1])[0];
