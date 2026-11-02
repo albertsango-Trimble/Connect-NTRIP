@@ -55,9 +55,21 @@ function when(ms: number) {
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 // ------------------------------------------------------------------ settings
+// Browser storage can be blocked or wiped inside the Connect frame, so values are also kept in memory.
+const memory = new Map<string, string>();
 function store(key: string, value?: string | null): string | null {
+  if (value === undefined) {
+    try {
+      const v = localStorage.getItem(`connect-ntrip.${key}`);
+      if (v !== null) return v;
+    } catch {
+      /* storage blocked */
+    }
+    return memory.get(key) ?? null;
+  }
+  if (value === null || value === '') memory.delete(key);
+  else memory.set(key, value);
   try {
-    if (value === undefined) return localStorage.getItem(`connect-ntrip.${key}`);
     if (value === null || value === '') localStorage.removeItem(`connect-ntrip.${key}`);
     else localStorage.setItem(`connect-ntrip.${key}`, value);
   } catch {
@@ -65,6 +77,8 @@ function store(key: string, value?: string | null): string | null {
   }
   return null;
 }
+/** The caster used when a project hasn't chosen one (set at build time). */
+const DEFAULT_CASTER_URL = String(import.meta.env.VITE_DEFAULT_CASTER_URL || '').replace(/\/+$/, '');
 /**
  * Inside Connect the caster URL belongs to the project: it is saved as a project file so everyone on the
  * project connects to the same caster, and kept in this browser per project so it connects straight away.
@@ -72,7 +86,7 @@ function store(key: string, value?: string | null): string | null {
  */
 let inConnectProject: string | null = null;
 const settings = {
-  get casterUrl() { return (inConnectProject ? store(`casterUrl.${inConnectProject}`) : store('casterUrl')) || ''; },
+  get casterUrl() { return (inConnectProject ? store(`casterUrl.${inConnectProject}`) : store('casterUrl')) || DEFAULT_CASTER_URL; },
   get devToken() { return store('devToken') || ''; },
 };
 

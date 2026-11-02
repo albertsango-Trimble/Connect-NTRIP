@@ -31,6 +31,9 @@ jobs:
           cache-dependency-path: extension/package-lock.json
       - run: npm ci
       - run: npm run build
+        env:
+          # Caster the extension connects to when a project hasn't saved its own
+          VITE_DEFAULT_CASTER_URL: https://caster.13-236-28-94.sslip.io
       - uses: actions/upload-pages-artifact@v3
         with:
           path: extension/dist
