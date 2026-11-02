@@ -716,12 +716,39 @@ function renderDevices() {
 
   const live = new Set([...app.rovers.values()].map((r) => r.serial));
   const el = $('#deviceList');
+  $('#deviceTools').classList.toggle('hidden', app.devices.length < 2);
   if (!app.devices.length) {
+    $('#deviceCount').textContent = '';
     el.innerHTML = '<div class="empty">No rover logins yet. Add one above using the receiver\'s serial number.</div>';
     return;
   }
-  el.innerHTML = [...app.devices]
-    .sort((a, b) => a.serial.localeCompare(b.serial))
+  const q = $<HTMLInputElement>('#deviceSearch').value.trim().toLowerCase();
+  const onlineOnly = $<HTMLInputElement>('#deviceOnlineOnly').checked;
+  const sortBy = $<HTMLSelectElement>('#deviceSort').value;
+  const text = (d: Device) => [d.serial, d.label, d.profile?.companyName, d.profile?.operatorName, d.profile?.companyEmail, d.profile?.operatorEmail, d.profile?.companyPhone, d.profile?.operatorPhone].join(' ').toLowerCase();
+  const name = (d: Device) => (d.label || d.serial).toLowerCase();
+  // Empty values sort last; ties fall back to machine name
+  const by = (key: (d: Device) => string) => (a: Device, b: Device) => {
+    const x = key(a), y = key(b);
+    if (!x !== !y) return x ? -1 : 1;
+    return x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' }) || name(a).localeCompare(name(b), undefined, { numeric: true });
+  };
+  const sorters: Record<string, (a: Device, b: Device) => number> = {
+    name: by(name),
+    serial: by((d) => d.serial),
+    company: by((d) => d.profile?.companyName || ''),
+    operator: by((d) => d.profile?.operatorName || ''),
+    online: (a, b) => Number(live.has(b.serial)) - Number(live.has(a.serial)) || by(name)(a, b),
+    newest: (a, b) => (b.created || '').localeCompare(a.created || ''),
+    updated: (a, b) => (b.updated || b.created || '').localeCompare(a.updated || a.created || ''),
+  };
+  const shown = app.devices.filter((d) => (!q || text(d).includes(q)) && (!onlineOnly || live.has(d.serial))).sort(sorters[sortBy] || sorters.name);
+  $('#deviceCount').textContent = shown.length === app.devices.length ? `${app.devices.length} logins · ${live.size} online` : `Showing ${shown.length} of ${app.devices.length}`;
+  if (!shown.length) {
+    el.innerHTML = '<div class="empty">No logins match.</div>';
+    return;
+  }
+  el.innerHTML = shown
     .map(
       (d) => `
     <div class="card device-row${d.enabled ? '' : ' disabled'}" style="margin-top:8px">
@@ -885,6 +912,8 @@ function handleMessage(msg: CasterMessage) {
     app.log = s.log;
     logHasOlder = s.log.length >= 100;
     app.devices = msg.devices;
+    // The add form starts folded away once a project has logins, unless the person chose otherwise before
+    if (store('loginFormOpen') === null) setLoginFormOpen(!app.devices.length, false);
     app.receivers = s.receivers ?? [];
     app.project = msg.project;
     applyRole();
@@ -989,6 +1018,27 @@ const PROFILE_KEYS = ['companyName', 'companyPhone', 'companyEmail', 'operatorNa
 // login form
 const form = $<HTMLFormElement>('#deviceForm');
 const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement;
+// ------------------------------------------------------------------ fold away the add-login form; sort and search the list
+let loginFormOpen: boolean | null = store('loginFormOpen') === null ? null : store('loginFormOpen') === '1';
+function setLoginFormOpen(open: boolean, remember = true) {
+  loginFormOpen = open;
+  if (remember) store('loginFormOpen', open ? '1' : '0');
+  $('#deviceForm').classList.toggle('collapsed', !open);
+  $('#deviceFormToggle').setAttribute('aria-expanded', String(open));
+}
+$('#deviceFormToggle').addEventListener('click', () => setLoginFormOpen(!loginFormOpen));
+for (const id of ['#deviceSort', '#deviceOnlineOnly']) {
+  $(id).addEventListener('change', () => {
+    store('deviceSort', $<HTMLSelectElement>('#deviceSort').value);
+    renderDevices();
+  });
+}
+$('#deviceSearch').addEventListener('input', () => renderDevices());
+{
+  const saved = store('deviceSort');
+  if (saved && [...$<HTMLSelectElement>('#deviceSort').options].some((o) => o.value === saved)) $<HTMLSelectElement>('#deviceSort').value = saved;
+}
+
 function resetForm() {
   app.editing = null;
   form.reset();
@@ -1054,6 +1104,7 @@ $('#deviceList').addEventListener('click', async (e) => {
     $('#deviceSubmit').textContent = 'Save changes';
     $('#deviceCancel').classList.remove('hidden');
     formMsg('', true);
+    setLoginFormOpen(true, false);
     form.scrollIntoView({ behavior: 'smooth' });
   } else if (t.dataset.toggle) {
     try {

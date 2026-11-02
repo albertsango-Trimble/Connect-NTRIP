@@ -99,7 +99,12 @@
         </div>
         <div id="importPreview" class="card form hidden"></div>
         <form id="deviceForm" class="card form">
-          <h3 id="deviceFormTitle">Add rover login</h3>
+          <button type="button" class="form-toggle" id="deviceFormToggle" aria-expanded="true" aria-controls="deviceFormBody">
+            <h3 id="deviceFormTitle">Add rover login</h3>
+            <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div id="deviceFormBody">
+          
           <label>Receiver serial number
             <input name="serial" required autocomplete="off" placeholder="e.g. 5834R00123" pattern="[A-Za-z0-9\-_]{3,40}">
           </label>
@@ -135,7 +140,26 @@
             <button type="button" class="ghost-btn hidden" id="deviceCancel">Cancel</button>
           </div>
           <p class="form-msg" id="deviceMsg"></p>
+                  </div>
         </form>
+        <div class="list-tools" id="deviceTools">
+          <input type="search" id="deviceSearch" placeholder="Search serial, machine, company or operator" autocomplete="off">
+          <div class="list-tools-row">
+            <label>Sort
+              <select id="deviceSort">
+                <option value="name">Machine name</option>
+                <option value="serial">Serial number</option>
+                <option value="company">Company</option>
+                <option value="operator">Operator</option>
+                <option value="online">Online first</option>
+                <option value="newest">Newest first</option>
+                <option value="updated">Recently changed</option>
+              </select>
+            </label>
+            <label class="inline"><input type="checkbox" id="deviceOnlineOnly"> Online only</label>
+            <span class="hint" id="deviceCount"></span>
+          </div>
+        </div>
         <div id="deviceList"></div>
       </div>
       <div class="tab-body hidden" id="tab-log"><ol class="log" id="logList"></ol></div>

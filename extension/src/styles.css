@@ -345,3 +345,18 @@ body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !im
 .dot-start { background: #2e7d32; } .dot-end { background: #c62828; }
 .trail-tip .maplibregl-popup-content { padding: 6px 9px; font-size: 12px; line-height: 1.4; pointer-events: none; }
 .trail-tip { pointer-events: none; }
+
+/* Add-login form folds away; login list can be searched and sorted */
+.form-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; text-align: left; }
+.form-toggle h3 { margin: 0; }
+.form-toggle .chev { width: 18px; height: 18px; color: var(--muted); transition: transform .15s; }
+#deviceForm.collapsed .chev { transform: rotate(-90deg); }
+#deviceFormBody { margin-top: 10px; }
+#deviceForm.collapsed #deviceFormBody { display: none; }
+.list-tools { margin: 10px 0 2px; display: flex; flex-direction: column; gap: 6px; }
+.list-tools input[type="search"] { width: 100%; }
+.list-tools-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; }
+.list-tools-row label:not(.inline) { display: flex; gap: 6px; align-items: center; }
+#deviceCount { margin-left: auto; }
+.list-tools input[type="search"], .list-tools select { font: inherit; font-size: 14px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+.list-tools select { font-size: 13px; padding: 5px 6px; }
