@@ -612,7 +612,8 @@ function renderReceivers() {
 /** How to point a base receiver at this project: caster address, port and the project's base password. */
 function renderBaseConnection() {
   const p = app.project;
-  if (!p) return '';
+  // Only project admins are given the base password, so only they see this card
+  if (!p?.isAdmin || !p.baseConnection) return '';
   const host = p.baseConnection.host || $('#casterAddr').textContent?.split(':')[0] || '';
   const pw = p.baseConnection.password;
   const open = app.baseCardOpen ?? !app.mountpoints.length;
@@ -854,6 +855,7 @@ function handleMessage(msg: CasterMessage) {
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
   } else if (msg.type === 'project') {
+    if (app.project && !app.project.isAdmin) return;
     app.project = msg.project;
     renderBases();
   } else if (msg.type === 'receivers') {

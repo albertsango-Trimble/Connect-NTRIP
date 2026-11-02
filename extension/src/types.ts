@@ -163,7 +163,10 @@ export interface Snapshot {
 export interface ProjectInfo {
   id: string;
   name: string;
-  baseConnection: { host: string | null; port: number; password: string };
+  /** True when the user is an admin of the Connect project */
+  isAdmin: boolean;
+  /** Only sent to project admins */
+  baseConnection: { host: string | null; port: number; password: string } | null;
 }
 
 /** A login as exported from one project for importing into another (the password stays hashed). */

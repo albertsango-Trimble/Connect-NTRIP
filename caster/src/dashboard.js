@@ -18,6 +18,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
   const projects = config.projects;
   const authCache = new Map(); // sha256(token) -> { user, expires }
   const projectCache = new Map(); // sha256(token + project) -> expires
+  const adminCache = new Map(); // sha256(token + project) -> { admin, expires }
 
   const hash = s => crypto.createHash('sha256').update(s).digest('hex');
 
@@ -38,7 +39,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
           const me = await res.json();
           const email = String(me.email || '').toLowerCase();
           if (config.adminEmails.includes(email)) {
-            user = { email, name: [me.firstName, me.lastName].filter(Boolean).join(' ') || email };
+            user = { email, id: me.id || null, name: [me.firstName, me.lastName].filter(Boolean).join(' ') || email };
           } else {
             console.warn(`Dashboard login refused for ${email || '(no email)'}: not in adminEmails`);
           }
@@ -72,6 +73,37 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
     return false;
   }
 
+  /**
+   * True when the user is an administrator of the Connect project (role ADMIN in the project's team).
+   * Anything that can't be confirmed counts as not an admin.
+   */
+  async function isProjectAdmin(token, user, projectId) {
+    if (user.dev) return true;
+    const key = hash(`${token}|admin|${projectId}`);
+    const cached = adminCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.admin;
+    let admin = null;
+    for (const base of config.tcApiHosts) {
+      try {
+        const res = await fetch(`${base}/projects/${encodeURIComponent(projectId)}/users`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const body = await res.json();
+        const list = Array.isArray(body) ? body : body.items || body.users || [];
+        const me = list.find(u => (user.id && u.id === user.id) || String(u.email || '').toLowerCase() === user.email);
+        admin = String(me?.role || '').toUpperCase() === 'ADMIN';
+        break;
+      } catch {
+        /* try the next region */
+      }
+    }
+    if (admin === null) {
+      console.warn(`Could not read the team of project ${projectId} to check whether ${user.email} is an admin`);
+      return false; // not cached, so it is tried again next time
+    }
+    adminCache.set(key, { admin, expires: Date.now() + AUTH_CACHE_MS });
+    return admin;
+  }
+
   /** Signs in and opens the project; throws a 401/403 error when not allowed. */
   async function access(token, projectId, projectName) {
     const user = await authenticate(token);
@@ -80,14 +112,17 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
     if (!(await canOpenProject(token, user, projectId))) throw new UserError('You do not have access to this project', 403);
     const { project, claimedLegacy } = projects.open(projectId, projectName);
     if (claimedLegacy) state.event('project.took_over_existing', { project: projectId, by: user.email });
-    return { user, project };
+    const admin = await isProjectAdmin(token, user, projectId);
+    return { user: { ...user, projectAdmin: admin }, project, admin };
   }
 
-  function projectInfo(p) {
+  /** The base password and connection details are only given to the project's admins. */
+  function projectInfo(p, admin) {
     return {
       id: p.id,
       name: p.name,
-      baseConnection: { host: config.publicHost || null, port: config.ntripPort, password: p.sourcePassword },
+      isAdmin: !!admin,
+      baseConnection: admin ? { host: config.publicHost || null, port: config.ntripPort, password: p.sourcePassword } : null,
     };
   }
 
@@ -141,7 +176,7 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       const projectId = String(req.headers['x-connect-project'] || url.searchParams.get('project') || '');
       let projectName = '';
       try { projectName = decodeURIComponent(String(req.headers['x-connect-project-name'] || '')); } catch { /* ignore */ }
-      const { user, project } = await access(token, projectId, projectName);
+      const { user, project, admin } = await access(token, projectId, projectName);
       const P = project.id;
       const devices = projects.devicesFor(P);
       const history = projects.historyFor(P);
@@ -152,12 +187,13 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       const pushDevices = () => broadcast({ type: 'devices', devices: devices.list() }, P);
 
       // GET /api/project   POST /api/project/base-password (new base password for this project)
-      if (req.method === 'GET' && url.pathname === '/api/project') return send(res, 200, projectInfo(project));
+      if (req.method === 'GET' && url.pathname === '/api/project') return send(res, 200, projectInfo(project, admin));
       if (req.method === 'POST' && url.pathname === '/api/project/base-password') {
+        if (!admin) throw new UserError('Only project admins can change the base password', 403);
         projects.newPassword(P);
         state.event('project.base_password_changed', { project: P, by: user.email });
-        const info = projectInfo(projects.get(P));
-        broadcast({ type: 'project', project: info }, P);
+        const info = projectInfo(projects.get(P), true);
+        broadcast({ type: 'project', project: info }, P, true);
         return send(res, 200, info);
       }
 
@@ -346,18 +382,19 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       }
       clearTimeout(authTimer);
       ws.project = granted.project.id;
+      ws.admin = granted.admin;
       authed.add(ws);
       ws.send(JSON.stringify({
-        type: 'hello', user: granted.user, project: projectInfo(granted.project),
+        type: 'hello', user: granted.user, project: projectInfo(granted.project, granted.admin),
         snapshot: state.snapshot(ws.project), devices: projects.devicesFor(ws.project).list(),
       }));
     });
     ws.on('close', () => { clearTimeout(authTimer); authed.delete(ws); });
   });
 
-  function broadcast(msg, project) {
+  function broadcast(msg, project, adminsOnly = false) {
     const data = JSON.stringify(msg);
-    for (const ws of authed) if (ws.project === project && ws.readyState === ws.OPEN) ws.send(data);
+    for (const ws of authed) if (ws.project === project && (!adminsOnly || ws.admin) && ws.readyState === ws.OPEN) ws.send(data);
   }
 
   // Push discrete events immediately (only to their own project); positions and rates once a second.
