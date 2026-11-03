@@ -207,31 +207,49 @@ export class ProjectFiles {
     return made.id;
   }
 
-  /** Ids of the project's administrators (role ADMIN in the project team). */
-  async adminIds(): Promise<string[]> {
+  /** The project's administrators (role ADMIN in the project team): their user id and Trimble ID. */
+  async admins(): Promise<{ id: string; tiduuid?: string; email?: string }[]> {
     const reply = (await this.getJson(`/projects/${encodeURIComponent(this.projectId)}/users`)) as unknown;
     const rows = Array.isArray(reply) ? reply : ((reply as { items?: unknown[] } | null)?.items ?? []);
     return (rows as Record<string, unknown>[])
       .filter((r) => String(r?.role ?? '').toUpperCase() === 'ADMIN' && typeof r.id === 'string' && !/^(inactive|removed|rejected)$/i.test(String(r.status ?? '')))
-      .map((r) => r.id as string);
+      .map((r) => ({ id: r.id as string, tiduuid: typeof r.tiduuid === 'string' ? r.tiduuid : undefined, email: typeof r.email === 'string' ? r.email : undefined }));
   }
 
   /**
-   * Makes a folder visible to the project's administrators only: No Access for all project members, Full Access
-   * for each admin, not inherited from the parent. Returns true when it changed anything.
+   * Makes a folder visible to the project's administrators only: No Access for all project members
+   * ("tc-groups:*"), Full Access for each admin ("users:<id>"), not inherited from the parent folder.
+   * Reads the permissions back to confirm Connect applied them. Returns true when it changed anything.
    */
   async restrictToAdmins(folderId: string): Promise<boolean> {
-    const admins = await this.adminIds();
+    const admins = await this.admins();
     if (!admins.length) throw new Error("couldn't read the project's administrators");
     const path = `/folders/fs/${encodeURIComponent(folderId)}/permissions`;
-    const current = ((await this.getJson(path).catch(() => ({}))) ?? {}) as { acl?: Record<string, string[]>; inheritance?: boolean };
-    const want = { NO_ACCESS: ['tc-groups:*'], FULL_ACCESS: [...admins].sort() };
-    const have = current.acl ?? {};
-    const same = current.inheritance === false && JSON.stringify([...(have.NO_ACCESS ?? [])].sort()) === JSON.stringify(want.NO_ACCESS)
-      && JSON.stringify([...(have.FULL_ACCESS ?? [])].sort()) === JSON.stringify(want.FULL_ACCESS) && !(have.READ ?? []).length;
-    if (same) return false;
-    await this.send('PATCH', path, { acl: want, inheritance: false });
-    return true;
+    const read = async () => ((await this.getJson(path).catch(() => ({}))) ?? {}) as { acl?: Record<string, string[]>; inheritance?: boolean };
+    const applied = (got: { acl?: Record<string, string[]>; inheritance?: boolean }, full: string[]) => {
+      const acl = got.acl ?? {};
+      return got.inheritance === false && (acl.NO_ACCESS ?? []).includes('tc-groups:*') && !(acl.READ ?? []).includes('tc-groups:*')
+        && !(acl.FULL_ACCESS ?? []).includes('tc-groups:*') && full.every((u) => (acl.FULL_ACCESS ?? []).includes(u));
+    };
+    // Trimble's API takes "users:<id>"; its example is a Trimble ID (UUID), so try that first, then the user id
+    const variants = [admins.map((a) => a.tiduuid), admins.map((a) => a.id)]
+      .filter((v): v is string[] => v.every(Boolean))
+      .map((ids) => ids.map((x) => `users:${x}`));
+    const now = await read();
+    if (variants.some((full) => applied(now, full))) return false;
+    const problems: string[] = [];
+    for (const full of variants) {
+      try {
+        await this.send('PATCH', path, { acl: { NO_ACCESS: ['tc-groups:*'], FULL_ACCESS: full }, inheritance: false });
+      } catch (err) {
+        problems.push((err as Error).message);
+        continue;
+      }
+      const got = await read();
+      if (applied(got, full)) return true;
+      problems.push(`Connect accepted the change but the folder shows ${JSON.stringify(got.acl ?? {})}, inherited ${got.inheritance}`);
+    }
+    throw new Error(problems.join(' / ') || 'no admin ids to grant');
   }
 
   /** Moves a file into another folder (keeping its versions). */

@@ -9,7 +9,7 @@ import { RangeClient } from './core/geotiffTiles';
 import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, projectProj4, toProject } from './core/geo';
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
-import { EXT_FOLDER, extensionFolder, loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, type SharedMap } from './connect/sharedSession';
+import { EXT_FOLDER, extensionFolder, resetExtensionFolder, loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, type SharedMap } from './connect/sharedSession';
 import type { LoginEmail } from './types';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord, ProjectInfo, LoginExport } from './types';
 
@@ -869,13 +869,13 @@ async function syncReports() {
 
 function renderReports() {
   if (!app.project?.isAdmin) return '';
+  const banner = folderStatus ? `<div class="card folder-warn"><b>Project folder</b><p class="warn">${esc(folderStatus)}</p><button class="link-btn" data-folder-retry>Try again</button></div>` : '';
   const recent = [...app.reports].sort((a, b) => b.month.localeCompare(a.month) || a.mount.localeCompare(b.mount)).slice(0, 8);
   const monthName = (m: string) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5) - 1, 15)).toLocaleDateString([], { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  return `
+  return `${banner}
     <details class="card reports-card"${app.reportsOpen ? ' open' : ''}>
       <summary><b>Monthly reports</b><span class="hint">${recent.length ? esc(monthName(recent[0].month)) : 'first one after this month ends'}</span></summary>
       <p class="card-sub">A report for each mountpoint is made just after midnight on the 1st and saved in the project's <b>${esc(EXT_FOLDER)}</b> folder (project admins only) as <b>${esc(REPORT_NAME)} - &lt;mountpoint&gt;</b> (PDF and CSV). Each month becomes a new version of the same file, so earlier months are in the file's version history in Connect.</p>
-      ${folderStatus ? `<p class="warn">${esc(folderStatus)}</p>` : ''}
       ${app.reportStatus ? `<p class="card-sub">${esc(app.reportStatus)}</p>` : ''}
       ${recent.length ? `<table class="mini-table"><tbody>${recent.map((r) => `<tr><td>${esc(monthName(r.month))}</td><td>${esc(r.mount)}</td>
         <td>${r.uploadedAt ? '<span class="sub">in project</span>' : '<span class="sub">waiting to be saved</span>'}</td>
@@ -899,6 +899,13 @@ $('#tab-bases').addEventListener('toggle', (e) => {
   if (d.classList?.contains('reports-card')) app.reportsOpen = d.open;
 }, true);
 $('#tab-bases').addEventListener('click', async (e) => {
+  if ((e.target as HTMLElement).closest('[data-folder-retry]')) {
+    folderStatus = 'Checking…';
+    renderBases();
+    if (projectFiles) resetExtensionFolder(projectFiles);
+    void setUpProjectFiles();
+    return;
+  }
   const t = (e.target as HTMLElement).closest<HTMLElement>('[data-report-pdf], [data-report-csv], [data-report-preview]');
   if (!t) return;
   const label = t.textContent;

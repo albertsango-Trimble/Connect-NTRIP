@@ -62,6 +62,10 @@ export interface ExtFolder {
 }
 
 const folders = new WeakMap<ProjectFiles, Promise<ExtFolder>>();
+/** Forgets the folder check for this page, so the next call sets it up (and its permissions) again. */
+export function resetExtensionFolder(project: ProjectFiles): void {
+  folders.delete(project);
+}
 /**
  * The extension's folder (created if needed), limited to the project's admins, with files the extension
  * saved in the top folder before moved into it (they keep their versions). Done once per page load; admins only.
@@ -78,7 +82,7 @@ export function extensionFolder(project: ProjectFiles): Promise<ExtFolder> {
         await project.restrictToAdmins(id);
       } catch (err) {
         restricted = false;
-        warning = `the "${EXT_FOLDER}" folder couldn't be limited to project admins (${(err as Error).message}). Set it to No Access for other members in Connect's folder permissions.`;
+        warning = `The "${EXT_FOLDER}" folder couldn't be limited to project admins, so other members may see it. Until this is fixed, set it in Connect: Explorer → the folder → Permissions → All project members: No Access, and each admin: Full Access. (${(err as Error).message})`;
       }
       const moved: string[] = [];
       for (const item of await project.list(root.id)) {
