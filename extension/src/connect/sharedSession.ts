@@ -76,9 +76,9 @@ export function extensionFolder(project: ProjectFiles): Promise<ExtFolder> {
     f = (async () => {
       const root = await project.root();
       const id = await project.ensureFolder(root.id, EXT_FOLDER);
-      // Permissions are left to the project admin; this only checks, to remind them if it's still open to everyone
-      const restricted = (await project.looksRestricted(id)) !== false;
-      const warning = restricted ? undefined : `Only project admins should see the "${EXT_FOLDER}" folder (it holds the monthly reports and the caster setting). In Connect: Explorer → the folder → Permissions, take away access for All project members and give the admins Full Access.`;
+      // Permissions are left to the project admin to set in Connect
+      const restricted = true;
+      const warning: string | undefined = undefined;
       const moved: string[] = [];
       for (const item of await project.list(root.id)) {
         if (item.isFolder) continue;
