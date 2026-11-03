@@ -400,5 +400,5 @@ body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !im
 .mini-table td { padding: 4px 4px; border-bottom: 1px solid var(--line); }
 .mini-table td:last-child { text-align: right; white-space: nowrap; }
 
-.folder-warn { margin-bottom: 10px; border-color: var(--q5); }
-.folder-warn .warn { margin: 4px 0 6px; line-height: 1.45; }
+.folder-warn { margin-bottom: 10px; }
+.folder-warn .card-sub { margin: 4px 0 6px; line-height: 1.45; }

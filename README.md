@@ -155,7 +155,7 @@ Put the SMTP password in the service's environment rather than the file: `sudo s
 
 ## 3a-2. The extension's folder in the project
 
-Everything the extension saves in a Connect project (the caster address setting and the monthly reports) goes in a folder called **NTRIP Caster Extension**. The first time a project admin opens the extension, it creates the folder and sets its permissions to **No Access** for all project members and **Full Access** for each project admin, not inherited from the top folder. It also moves in any files it saved in the top folder before, keeping their versions. Each time an admin opens it, the permissions are checked again, so new admins get access. If Connect refuses the permission change, **Bases → Monthly reports** shows a warning; set the folder to No Access for other members in Connect's folder permissions yourself.
+Everything the extension saves in a Connect project (the caster address setting and the monthly reports) goes in a folder called **NTRIP Caster Extension**. The first time a project admin opens the extension, it creates the folder and moves in any files it saved in the top folder before (keeping their versions). **The project admin sets the folder's permissions in Connect** (Explorer → the folder → Permissions: remove All project members, give the admins Full Access). Until then, **Bases** shows a reminder; the extension only reads the permissions, it never changes them.
 
 Base maps shared with the project (GeoTIFFs) are kept on the caster instead, because every project member's map needs them. Only project admins can change them.
 

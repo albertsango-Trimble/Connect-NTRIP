@@ -54,7 +54,7 @@ const REPORT_PREFIX = 'NTRIP Caster Monthly Report - ';
 
 export interface ExtFolder {
   id: string;
-  /** False when the folder couldn't be limited to admins (the reason is in `warning`) */
+  /** False when the folder still looks open to all project members (a reminder is in `warning`) */
   restricted: boolean;
   warning?: string;
   /** Files moved into it from the project's top folder this time */
@@ -67,8 +67,8 @@ export function resetExtensionFolder(project: ProjectFiles): void {
   folders.delete(project);
 }
 /**
- * The extension's folder (created if needed), limited to the project's admins, with files the extension
- * saved in the top folder before moved into it (they keep their versions). Done once per page load; admins only.
+ * The extension's folder (created if needed), with files the extension saved in the top folder before moved into
+ * it (they keep their versions). Its permissions are set by the project admin in Connect. Done once per page load.
  */
 export function extensionFolder(project: ProjectFiles): Promise<ExtFolder> {
   let f = folders.get(project);
@@ -76,14 +76,9 @@ export function extensionFolder(project: ProjectFiles): Promise<ExtFolder> {
     f = (async () => {
       const root = await project.root();
       const id = await project.ensureFolder(root.id, EXT_FOLDER);
-      let restricted = true;
-      let warning: string | undefined;
-      try {
-        await project.restrictToAdmins(id);
-      } catch (err) {
-        restricted = false;
-        warning = `The "${EXT_FOLDER}" folder couldn't be limited to project admins, so other members may see it. Until this is fixed, set it in Connect: Explorer → the folder → Permissions → All project members: No Access, and each admin: Full Access. (${(err as Error).message})`;
-      }
+      // Permissions are left to the project admin; this only checks, to remind them if it's still open to everyone
+      const restricted = (await project.looksRestricted(id)) !== false;
+      const warning = restricted ? undefined : `Only project admins should see the "${EXT_FOLDER}" folder (it holds the monthly reports and the caster setting). In Connect: Explorer → the folder → Permissions, take away access for All project members and give the admins Full Access.`;
       const moved: string[] = [];
       for (const item of await project.list(root.id)) {
         if (item.isFolder) continue;

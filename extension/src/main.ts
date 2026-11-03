@@ -802,7 +802,7 @@ async function setUpProjectFiles() {
   if (!app.project?.isAdmin || !projectFiles) return;
   try {
     const f = await extensionFolder(projectFiles);
-    folderStatus = f.restricted ? '' : `Warning: ${f.warning}`;
+    folderStatus = f.restricted ? '' : f.warning || '';
     if (f.moved.length) console.info(`[ntrip] moved ${f.moved.length} file(s) into ${EXT_FOLDER}:`, f.moved);
   } catch (err) {
     folderStatus = `Couldn't set up the "${EXT_FOLDER}" folder: ${(err as Error).message}`;
@@ -869,7 +869,7 @@ async function syncReports() {
 
 function renderReports() {
   if (!app.project?.isAdmin) return '';
-  const banner = folderStatus ? `<div class="card folder-warn"><b>Project folder</b><p class="warn">${esc(folderStatus)}</p><button class="link-btn" data-folder-retry>Try again</button></div>` : '';
+  const banner = folderStatus ? `<div class="card folder-warn"><b>Project folder</b><p class="card-sub">${esc(folderStatus)}</p><button class="link-btn" data-folder-retry>Check again</button></div>` : '';
   const recent = [...app.reports].sort((a, b) => b.month.localeCompare(a.month) || a.mount.localeCompare(b.mount)).slice(0, 8);
   const monthName = (m: string) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5) - 1, 15)).toLocaleDateString([], { month: 'long', year: 'numeric', timeZone: 'UTC' });
   return `${banner}

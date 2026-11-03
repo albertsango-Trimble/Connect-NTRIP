@@ -217,39 +217,17 @@ export class ProjectFiles {
   }
 
   /**
-   * Makes a folder visible to the project's administrators only: No Access for all project members
-   * ("tc-groups:*"), Full Access for each admin ("users:<id>"), not inherited from the parent folder.
-   * Reads the permissions back to confirm Connect applied them. Returns true when it changed anything.
+   * Whether a folder looks limited to some people: it doesn't inherit its parent's permissions and the
+   * "all project members" group has no access listed. Only reads; the project admin sets the permissions in Connect.
    */
-  async restrictToAdmins(folderId: string): Promise<boolean> {
-    const admins = await this.admins();
-    if (!admins.length) throw new Error("couldn't read the project's administrators");
-    const path = `/folders/fs/${encodeURIComponent(folderId)}/permissions`;
-    const read = async () => ((await this.getJson(path).catch(() => ({}))) ?? {}) as { acl?: Record<string, string[]>; inheritance?: boolean };
-    const applied = (got: { acl?: Record<string, string[]>; inheritance?: boolean }, full: string[]) => {
-      const acl = got.acl ?? {};
-      return got.inheritance === false && (acl.NO_ACCESS ?? []).includes('tc-groups:*') && !(acl.READ ?? []).includes('tc-groups:*')
-        && !(acl.FULL_ACCESS ?? []).includes('tc-groups:*') && full.every((u) => (acl.FULL_ACCESS ?? []).includes(u));
-    };
-    // Trimble's API takes "users:<id>"; its example is a Trimble ID (UUID), so try that first, then the user id
-    const variants = [admins.map((a) => a.tiduuid), admins.map((a) => a.id)]
-      .filter((v): v is string[] => v.every(Boolean))
-      .map((ids) => ids.map((x) => `users:${x}`));
-    const now = await read();
-    if (variants.some((full) => applied(now, full))) return false;
-    const problems: string[] = [];
-    for (const full of variants) {
-      try {
-        await this.send('PATCH', path, { acl: { NO_ACCESS: ['tc-groups:*'], FULL_ACCESS: full }, inheritance: false });
-      } catch (err) {
-        problems.push((err as Error).message);
-        continue;
-      }
-      const got = await read();
-      if (applied(got, full)) return true;
-      problems.push(`Connect accepted the change but the folder shows ${JSON.stringify(got.acl ?? {})}, inherited ${got.inheritance}`);
+  async looksRestricted(folderId: string): Promise<boolean | null> {
+    try {
+      const got = (await this.getJson(`/folders/fs/${encodeURIComponent(folderId)}/permissions`)) as { acl?: Record<string, string[]>; inheritance?: boolean };
+      const acl = got?.acl ?? {};
+      return got?.inheritance === false && !(acl.READ ?? []).includes('tc-groups:*') && !(acl.FULL_ACCESS ?? []).includes('tc-groups:*');
+    } catch {
+      return null;
     }
-    throw new Error(problems.join(' / ') || 'no admin ids to grant');
   }
 
   /** Moves a file into another folder (keeping its versions). */
