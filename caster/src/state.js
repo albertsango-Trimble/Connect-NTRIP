@@ -322,6 +322,7 @@ export class CasterState extends EventEmitter {
       rateBps: c.rateBps,
       gga: c.gga,
       ggaAt: c.ggaAt,
+      net: c.net || null,
       ...(withTrack ? { track: c.track } : {}),
     };
   }

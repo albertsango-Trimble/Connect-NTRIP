@@ -362,6 +362,8 @@ function roverPopup(r: Rover) {
     <tr><td>Satellites</td><td>${g?.sats ?? '—'}</td></tr>
     <tr><td>HDOP</td><td>${g?.hdop ?? '—'}</td></tr>
     <tr><td>Corr. age</td><td>${g?.ageOfCorrections != null ? `${g.ageOfCorrections} s` : '—'}</td></tr>
+    <tr><td>Connection</td><td title="${esc(netTitle(r))}">${netBars(r)}</td></tr>
+    <tr><td>Ping</td><td>${r.net?.pingMs != null ? `${r.net.pingMs} ms` : '—'}</td></tr>
     <tr><td>Position</td><td>${g?.hasPosition ? `${g.lat!.toFixed(7)}, ${g.lon!.toFixed(7)}` : '—'}</td></tr>
     <tr><td>Height</td><td>${g?.alt != null ? `${g.alt.toFixed(3)} m` : '—'}</td></tr>
     <tr><td>Connected</td><td>${duration(serverNow() - r.connectedAt)}</td></tr>
@@ -587,7 +589,11 @@ function renderRovers() {
           <div><span>Receiving</span><b>${rate(r.rateBps || 0)}</b></div>
           <div><span>Connected</span><b>${duration(serverNow() - r.connectedAt)}</b></div>
           <div><span>Last position</span><b>${sinceGga}</b></div>
+          <div title="${esc(netTitle(r))}"><span>Connection</span><b>${netBars(r)}</b></div>
+          <div title="Round-trip time between the caster and the machine${r.net?.jitterMs != null ? `, varying by about ${r.net.jitterMs} ms` : ''}"><span>Ping</span><b>${r.net?.pingMs != null ? `${r.net.pingMs} ms` : '—'}</b></div>
+          <div title="Data that had to be sent to the machine again recently (lost on the way)"><span>Resent</span><b>${r.net?.lossPct != null ? `${r.net.lossPct}%` : '—'}</b></div>
         </div>
+        ${r.net && r.net.bars <= 2 && r.net.reasons.length ? `<div class="warn">Weak connection: ${esc(r.net.reasons.join(', '))}</div>` : ''}
         ${profileLines(deviceOf(r.serial)?.profile)}
         ${!g ? '<div class="warn">Receiving corrections, but this rover isn\'t sending its position (GGA). Turn on "send NMEA GGA to caster" on the receiver to see it on the map.</div>' : ''}
         <div class="card-sub" style="margin-top:6px">${esc(r.protocol)} · ${esc(r.addr)}${r.agent ? ` · ${esc(r.agent)}` : ''}
@@ -595,6 +601,19 @@ function renderRovers() {
       </div>`;
     })
     .join(''));
+}
+
+/** Signal-style bars for a machine's connection quality, with its label. */
+function netBars(r: Rover): string {
+  const n = r.net;
+  if (!n) return '<span class="sub">measuring…</span>';
+  const bars = [1, 2, 3, 4].map((i) => `<i class="${i <= n.bars ? 'on' : ''}" style="height:${3 + i * 3}px"></i>`).join('');
+  return `<span class="netbars q${n.bars}" aria-label="${esc(n.label)}">${bars}</span> ${esc(n.label)}`;
+}
+function netTitle(r: Rover): string {
+  const n = r.net;
+  if (!n) return 'Measured from the network link a few seconds after the machine connects';
+  return `Measured by the caster from the network link to the machine (not the receiver's own signal reading).${n.reasons.length ? ` ${n.reasons.join('; ')}.` : ' No problems seen.'}`;
 }
 
 /** "MSM4: GPS, GLONASS, Galileo, QZSS, BeiDou" from the RTCM message numbers a base is sending. */

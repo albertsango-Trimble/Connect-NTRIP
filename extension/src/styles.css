@@ -384,3 +384,10 @@ body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !im
 .export-dlg .pick-row input { margin: 0; }
 .export-dlg .list-tools-row label { white-space: nowrap; }
 .export-dlg input[type="checkbox"] { width: auto; flex: none; }
+
+/* Connection strength bars */
+.netbars { display: inline-flex; align-items: flex-end; gap: 2px; height: 15px; vertical-align: -2px; }
+.netbars i { display: block; width: 4px; border-radius: 1px; background: var(--line); }
+.netbars.q4 i.on, .netbars.q3 i.on { background: var(--q4); }
+.netbars.q2 i.on { background: var(--q5); }
+.netbars.q1 i.on { background: #d93025; }

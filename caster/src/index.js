@@ -10,6 +10,7 @@ import { ManualPositions } from './positions.js';
 import { ReceiverStore } from './receivers.js';
 import { Projects } from './projects.js';
 import { initSecrets } from './secrets.js';
+import { startNetStats } from './netstats.js';
 
 const config = loadConfig();
 initSecrets(config.dataDir);
@@ -31,6 +32,7 @@ const tokens = new Tokens(loadSecret(config));
 const ntrip = startNtripServer({ config, state });
 const dash = startDashboard({ config, state, tokens, receiverStore });
 const webui = startWebUiProxy({ config, state, tokens, receiverStore });
+startNetStats({ config, state });
 
 function shutdown() {
   console.log('Shutting down');

@@ -17,6 +17,21 @@ export interface Gga {
 /** [lat, lon, time ms, fix quality] */
 export type TrackPoint = [number, number, number, number];
 
+export interface NetQuality {
+  /** Round-trip time to the machine */
+  pingMs: number | null;
+  /** How much the round-trip time varies */
+  jitterMs: number | null;
+  /** Share of data that had to be sent again recently */
+  lossPct: number | null;
+  sendQueue: number;
+  at: number;
+  /** 4 = Excellent, 3 = Good, 2 = Fair, 1 = Poor */
+  bars: number;
+  label: string;
+  reasons: string[];
+}
+
 export interface Rover {
   id: string;
   serial: string;
@@ -31,6 +46,8 @@ export interface Rover {
   gga: Gga | null;
   ggaAt: number | null;
   track?: TrackPoint[];
+  /** Connection quality, measured by the caster from the network link (updated every few seconds) */
+  net?: NetQuality | null;
 }
 
 export interface Mountpoint {
