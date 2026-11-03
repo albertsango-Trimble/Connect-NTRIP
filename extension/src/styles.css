@@ -391,3 +391,11 @@ body.view-only [data-webui], body.view-only [data-webui-tab] { display: none !im
 .netbars.q4 i.on, .netbars.q3 i.on { background: var(--q4); }
 .netbars.q2 i.on { background: var(--q5); }
 .netbars.q1 i.on { background: #d93025; }
+
+/* Monthly reports */
+.reports-card { margin-bottom: 10px; }
+.reports-card summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.reports-card .card-sub { margin: 6px 0; line-height: 1.45; }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mini-table td { padding: 4px 4px; border-bottom: 1px solid var(--line); }
+.mini-table td:last-child { text-align: right; white-space: nowrap; }

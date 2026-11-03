@@ -1,11 +1,26 @@
 // Live registry of connected bases (sources) and rovers (clients).
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const TRACK_POINTS = 300;
 // A session's trail on disk: a point when the machine has moved this far, the fix changes, or this long has passed
 const TRAIL_MIN_MOVE_M = 0.5;
 const TRAIL_MAX_GAP_MS = 10_000;
 const TRAIL_FLUSH_MS = 15_000;
+
+const SEEN_FILE = 'base-positions-seen.json';
+function loadSeen(dir) {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, SEEN_FILE), 'utf8')); } catch { return {}; }
+}
+function saveSeen(dir, data) {
+  try {
+    fs.writeFileSync(path.join(dir, SEEN_FILE + '.tmp'), JSON.stringify(data, null, 2), { mode: 0o600 });
+    fs.renameSync(path.join(dir, SEEN_FILE + '.tmp'), path.join(dir, SEEN_FILE));
+  } catch (err) {
+    console.error(`Could not save base positions: ${err.message}`);
+  }
+}
 
 function metres(lat1, lon1, lat2, lon2) {
   const r = Math.PI / 180;
@@ -58,6 +73,20 @@ export class CasterState extends EventEmitter {
     if (this.sources.get(src.mount) !== src) return;
     this.sources.delete(src.mount);
     this.event('source.disconnected', { project: src.project, mount: src.mount, addr: src.addr, reason });
+    // Kept for the monthly report: when the base was connected and what it sent
+    const st = src.monitor?.station;
+    this.projects?.appendBase(src.project, src.mount, {
+      type: 'base',
+      start: src.connectedAt,
+      end: Date.now(),
+      bytes: src.bytesIn,
+      addr: src.addr,
+      protocol: src.protocol,
+      format: src.monitor?.detected?.() || null,
+      messageTypes: src.monitor ? src.monitor.messageTypes() : [],
+      position: st && Number.isFinite(st.lat) ? { lat: st.lat, lon: st.lon, h: st.h ?? null, from: st.from } : null,
+      endReason: reason,
+    });
   }
 
   relay(src, data) {
@@ -102,6 +131,32 @@ export class CasterState extends EventEmitter {
     history?.compressTrack(client.serial, client.connectedAt);
   }
 
+  /**
+   * Logs when the position a base sends in its data changes (by more than 5 cm), including between connections,
+   * so a base that was moved or re-set up shows in the log and the monthly report.
+   */
+  checkBasePosition(src) {
+    const st = src.monitor?.station;
+    if (!st || !Number.isFinite(st.lat) || !Number.isFinite(st.lon)) return;
+    this.seenPositions ??= loadSeen(this.config.dataDir);
+    const prev = this.seenPositions[src.mount];
+    const now = { lat: st.lat, lon: st.lon, h: st.h ?? null, from: st.from, at: new Date().toISOString() };
+    if (prev) {
+      const horiz = metres(prev.lat, prev.lon, st.lat, st.lon);
+      const dh = prev.h != null && st.h != null ? st.h - prev.h : 0;
+      if (horiz <= 0.05 && Math.abs(dh) <= 0.05) return;
+      this.event('mountpoint.position_changed', {
+        project: src.project, mount: src.mount, lat: st.lat, lon: st.lon, h: st.h ?? null, from: st.from,
+        movedM: Math.round(horiz * 1000) / 1000, heightChangeM: Math.round(dh * 1000) / 1000,
+        previous: { lat: prev.lat, lon: prev.lon, h: prev.h, since: prev.at },
+      });
+    } else {
+      this.event('mountpoint.position_detected', { project: src.project, mount: src.mount, lat: st.lat, lon: st.lon, h: st.h ?? null, from: st.from });
+    }
+    this.seenPositions[src.mount] = now;
+    saveSeen(this.config.dataDir, this.seenPositions);
+  }
+
   /** Adds the time since the last GGA to the fix type it reported (gaps over 30 s count as no position). */
   accountFix(client, now) {
     if (!client.ggaAt) return;
@@ -109,6 +164,8 @@ export class CasterState extends EventEmitter {
     const q = client.gga?.hasPosition ? client.gga.quality : 0;
     const counted = Math.min(dt, 30_000);
     client.fixMs[q] = (client.fixMs[q] || 0) + counted;
+    // Time the machine was working with corrections more than 3 s old (it reports the age in its GGA)
+    if (client.gga?.ageOfCorrections != null && client.gga.ageOfCorrections > 3) client.lateMs = (client.lateMs || 0) + counted;
     if (dt > counted) client.fixMs.gap = (client.fixMs.gap || 0) + (dt - counted);
   }
 
@@ -137,6 +194,13 @@ export class CasterState extends EventEmitter {
       firstPos: client.firstPos,
       lastPos: last ? [Number(last.lat.toFixed(7)), Number(last.lon.toFixed(7))] : null,
       trailPoints: client.trail?.points || 0,
+      lateCorrectionsSec: sec(client.lateMs),
+      // Connection quality over the session (see netstats.js)
+      net: client.netAcc?.n ? {
+        avgPingMs: Math.round(client.netAcc.pingSum / client.netAcc.n),
+        maxPingMs: client.netAcc.pingMax,
+        gradeSec: client.netAcc.gradeSec,
+      } : null,
     };
   }
 
@@ -224,6 +288,7 @@ export class CasterState extends EventEmitter {
     // Base-named mountpoints: note their format and position every 10 s, even with no dashboard open
     if (++this.tickCount % 10 === 0) {
       for (const m of this.config.mountpoints) if (m.auto && this.sources.has(m.name)) this.sourceView(m);
+      for (const s of this.sources.values()) this.checkBasePosition(s);
     }
     for (const s of this.sources.values()) {
       s.rateBps = s.bytesIn - s.lastBytes;

@@ -12,6 +12,8 @@ import { WebSocketServer } from 'ws';
 import { UserError, normaliseSerial } from './devices.js';
 import { isReceiverHost, startLink } from './webui.js';
 import { compose, emailEnabled, sendEmail } from './credentials.js';
+import fs from 'node:fs';
+import { buildMonth, listReports, markUploaded, monthOf, monthRange, previousMonth, reportFile } from './reports.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
 const EXPORT_FORMAT = 'connect-ntrip-logins';
@@ -219,6 +221,62 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       if (req.method === 'GET' && url.pathname === '/api/log') {
         const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
         return send(res, 200, { events: projects.readEvents(P, { before: url.searchParams.get('before') || null, limit }) });
+      }
+
+      // POST /api/project/geo -> the project's coordinate system, for easting/northing in the monthly reports
+      if (req.method === 'POST' && url.pathname === '/api/project/geo') {
+        const b = await readJson(req, 32 * 1024);
+        const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : null);
+        const geo = {
+          crsName: str(b.crsName, 200), code: str(b.code, 40),
+          proj4: typeof b.proj4 === 'string' && /^\+proj=/.test(b.proj4) ? b.proj4.slice(0, 2000) : null,
+          geoid: b.geoid && /^[A-Za-z0-9_.\-]{1,80}\.tif$/.test(String(b.geoid.file || '')) ? { name: str(b.geoid.name, 60), datum: str(b.geoid.datum, 30), file: String(b.geoid.file) } : null,
+          at: new Date().toISOString(),
+        };
+        projects.setGeo(P, geo);
+        return send(res, 200, { ok: true });
+      }
+
+      // Monthly reports. GET /api/reports  GET /api/reports/:month/:mount.(pdf|csv)
+      // POST /api/reports/:month/:mount/uploaded   POST /api/reports/preview {month?} -> PDF of a month so far
+      if (parts[1] === 'reports') {
+        if (req.method === 'GET' && parts.length === 2) return send(res, 200, { timeZone: config.reportTimeZone, reports: listReports(projects, P) });
+        if (req.method === 'GET' && parts.length === 4) {
+          const m = decodeURIComponent(parts[3]).match(/^(.+)\.(pdf|csv)$/);
+          const f = m && reportFile(projects, P, parts[2], m[1], m[2]);
+          if (!f) return send(res, 404, { error: 'Report not found' });
+          res.writeHead(200, { 'Content-Type': m[2] === 'pdf' ? 'application/pdf' : 'text/csv; charset=utf-8', 'Cache-Control': 'no-store' });
+          return fs.createReadStream(f).pipe(res);
+        }
+        if (req.method === 'POST' && parts[4] === 'uploaded') {
+          const mount = decodeURIComponent(parts[3]);
+          if (!markUploaded(projects, P, parts[2], mount, user.email)) return send(res, 404, { error: 'Report not found' });
+          state.event('report.uploaded', { project: P, mount, month: parts[2], by: user.email });
+          return send(res, 200, { ok: true });
+        }
+        if (req.method === 'POST' && parts[2] === 'preview') {
+          const body = await readJson(req);
+          const month = /^\d{4}-\d{2}$/.test(body.month || '') ? body.month : monthOf(config.reportTimeZone, Date.now());
+          const mount = String(body.mount || '');
+          const r = await buildMonth({ config, state, projects, projectId: P, month, store: false });
+          try {
+            const one = r.reports.find(x => x.mount === mount) || r.reports[0];
+            if (!one) return send(res, 404, { error: 'No base or machine activity in that month yet' });
+            res.writeHead(200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'X-Report-Mounts': r.reports.map(x => x.mount).join(',') });
+            res.end(fs.readFileSync(body.csv ? one.csv : one.pdf));
+          } finally {
+            fs.rmSync(r.dir, { recursive: true, force: true });
+          }
+          return;
+        }
+        if (req.method === 'POST' && parts[2] === 'generate') {
+          // Builds (or rebuilds) a finished month now, e.g. for a month before reports existed
+          const body = await readJson(req);
+          const month = /^\d{4}-\d{2}$/.test(body.month || '') ? body.month : previousMonth(monthOf(config.reportTimeZone, Date.now()));
+          if (monthRange(config.reportTimeZone, month).to > Date.now()) return send(res, 400, { error: 'That month has not finished yet; use preview' });
+          const r = await buildMonth({ config, state, projects, projectId: P, month });
+          return send(res, 200, { month, mounts: r.reports.map(x => x.mount) });
+        }
       }
 
       // GET /api/devices/export  -> this project's logins for importing into another project

@@ -26,6 +26,9 @@ export function loadConfig() {
   // Rover history and the event log are kept for good; an old historyDays setting is ignored
   if (cfg.historyDays) console.warn('historyDays is no longer used: rover history and the log are never cleared');
   cfg.mountpoints ??= [];
+  // Months in the monthly reports start and end at midnight in this time zone
+  cfg.reportTimeZone ??= 'Australia/Sydney';
+  try { new Intl.DateTimeFormat('en', { timeZone: cfg.reportTimeZone }); } catch { console.warn(`reportTimeZone "${cfg.reportTimeZone}" is not a time zone; using Australia/Sydney`); cfg.reportTimeZone = 'Australia/Sydney'; }
 
   const names = new Set();
   for (const m of cfg.mountpoints) {

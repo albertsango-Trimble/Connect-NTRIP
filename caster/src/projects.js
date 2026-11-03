@@ -104,6 +104,11 @@ export class Projects {
       fs.mkdirSync(path.join(dest, 'history'), { recursive: true });
       for (const f of fs.readdirSync(legacyHistory)) fs.renameSync(path.join(legacyHistory, f), path.join(dest, 'history', f));
     }
+    const legacyBases = path.join(this.config.dataDir, 'bases');
+    if (fs.existsSync(legacyBases)) {
+      fs.mkdirSync(path.join(dest, 'bases'), { recursive: true });
+      for (const f of fs.readdirSync(legacyBases)) fs.renameSync(path.join(legacyBases, f), path.join(dest, 'bases', f));
+    }
     for (const m of this.config.mountpoints) if (m.auto && !m.project) m.project = id;
     this.config.autoMounts?.save();
     this.config.receiverStore?.adopt(id);
@@ -157,8 +162,43 @@ export class Projects {
     return out.reverse();
   }
 
+  /** Each base connection to a mountpoint, for the monthly reports: <project>/bases/<mount>.jsonl */
+  baseFile(id, mount) {
+    if (!/^[A-Za-z0-9_\-]{1,100}$/.test(mount)) throw new Error(`bad mountpoint name ${mount}`);
+    const dir = id && ID_RE.test(id) ? path.join(this.projectDir(id), 'bases') : path.join(this.config.dataDir, 'bases');
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, `${mount}.jsonl`);
+  }
+
+  appendBase(id, mount, rec) {
+    try {
+      fs.appendFileSync(this.baseFile(id, mount), JSON.stringify(rec) + '\n', { mode: 0o600 });
+    } catch (err) {
+      console.error(`Could not record the base session for ${mount}: ${err.message}`);
+    }
+  }
+
+  readBase(id, mount) {
+    const f = this.baseFile(id, mount);
+    if (!fs.existsSync(f)) return [];
+    const out = [];
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+      if (!line) continue;
+      try { out.push(JSON.parse(line)); } catch { /* skip a damaged line */ }
+    }
+    return out;
+  }
+
   devicesFor(id) { return this.storesFor(id).devices; }
   historyFor(id) { return this.storesFor(id).history; }
+
+  /** The project's coordinate system and geoid, as the extension found them (for the monthly reports). */
+  setGeo(id, geo) {
+    const p = this.data.projects[id];
+    if (!p) throw new UserError('Unknown project', 404);
+    p.geo = geo;
+    this.save();
+  }
 
   /** Gives the project a new base password; bases using the old one must be updated. */
   newPassword(id) {

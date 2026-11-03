@@ -26,6 +26,7 @@ export function onGeoChange(listener: () => void): () => void {
  */
 export function defineProjectCrs(code: string, proj4Definition: string): void {
   proj4.defs(code, proj4Definition);
+  defText.set(code, proj4Definition);
   projectCrs = code;
   notify();
 }
@@ -167,9 +168,11 @@ export async function defineEpsg(code: string): Promise<string> {
     const registered = local ? null : await epsgByCode(Number(clean)).catch(() => null);
     if (local) {
       proj4.defs(name, local);
+      defText.set(name, local);
     } else if (registered) {
       // Every projected EPSG system proj4 can use is built into the app, so no lookup is needed.
       proj4.defs(name, registered.proj4);
+      defText.set(name, registered.proj4);
     } else {
       let res: Response;
       try {
@@ -181,9 +184,18 @@ export async function defineEpsg(code: string): Promise<string> {
       const definition = (await res.text()).trim();
       if (!definition.startsWith('+proj')) throw new Error(`EPSG:${clean} was not found`);
       proj4.defs(name, definition);
+      defText.set(name, definition);
     }
   }
   return name;
+}
+
+/** The proj4 definitions this page has set up, by name, so the project's system can be shared with the caster. */
+const defText = new Map<string, string>();
+/** The project coordinate system as a proj4 definition, e.g. for the caster's monthly reports. */
+export function projectProj4(): { code: string; proj4: string } | null {
+  const def = projectCrs ? defText.get(projectCrs) : undefined;
+  return projectCrs && def ? { code: projectCrs, proj4: def } : null;
 }
 
 /** Looks up an EPSG code and makes it the project coordinate system. */

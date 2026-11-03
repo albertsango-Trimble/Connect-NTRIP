@@ -93,13 +93,18 @@ export function startNetStats({ config, state }) {
         }
         const stalled = s.unacked > 0 && (s.lastAckMs ?? 0) > 5000;
         const age = c.gga?.ageOfCorrections ?? null;
+        const graded = grade({ rttMs: s.rttMs, lossPct: loss, stalled, sendQ: s.sendQ, ageOfCorrections: age });
+        // Totals over the session for its history record and the monthly report
+        const acc = (c.netAcc ??= { n: 0, pingSum: 0, pingMax: 0, gradeSec: { excellent: 0, good: 0, fair: 0, poor: 0 } });
+        if (s.rttMs != null) { acc.n++; acc.pingSum += s.rttMs; acc.pingMax = Math.max(acc.pingMax, Math.round(s.rttMs)); }
+        acc.gradeSec[['', 'poor', 'fair', 'good', 'excellent'][graded.bars]] += EVERY_MS / 1000;
         c.net = {
           pingMs: s.rttMs != null ? Math.round(s.rttMs) : null,
           jitterMs: s.rttVarMs != null ? Math.round(s.rttVarMs) : null,
           lossPct: loss == null ? null : Math.round(loss * 10) / 10,
           sendQueue: s.sendQ,
           at: now,
-          ...grade({ rttMs: s.rttMs, lossPct: loss, stalled, sendQ: s.sendQ, ageOfCorrections: age }),
+          ...graded,
         };
       }
     });

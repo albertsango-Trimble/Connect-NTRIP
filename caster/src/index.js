@@ -11,6 +11,7 @@ import { ReceiverStore } from './receivers.js';
 import { Projects } from './projects.js';
 import { initSecrets } from './secrets.js';
 import { startNetStats } from './netstats.js';
+import { startReports } from './reports.js';
 
 const config = loadConfig();
 initSecrets(config.dataDir);
@@ -33,6 +34,7 @@ const ntrip = startNtripServer({ config, state });
 const dash = startDashboard({ config, state, tokens, receiverStore });
 const webui = startWebUiProxy({ config, state, tokens, receiverStore });
 startNetStats({ config, state });
+startReports({ config, state, projects });
 
 function shutdown() {
   console.log('Shutting down');

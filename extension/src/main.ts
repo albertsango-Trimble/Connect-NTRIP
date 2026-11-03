@@ -6,7 +6,7 @@ import { baseStyle, createBasemap } from './map/basemap';
 import { connectToHost, type HostConnection } from './connect/workspace';
 import { ProjectFiles } from './connect/projectFiles';
 import { RangeClient } from './core/geotiffTiles';
-import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, toProject } from './core/geo';
+import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, projectProj4, toProject } from './core/geo';
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
 import { loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
@@ -111,8 +111,12 @@ const app = {
   project: null as ProjectInfo | null,
   showBasePassword: false,
   pendingImport: null as LoginExport | null,
+  /** Monthly reports the caster has made for this project (admins) */
+  reports: [] as { month: string; mount: string; generatedAt: string; uploadedAt: string | null; uploadedBy: string | null }[],
+  reportStatus: '' as string,
   /** Whether the "Connect a base" card is open; null = open only while the project has no bases */
   baseCardOpen: null as boolean | null,
+  reportsOpen: false,
 };
 
 /** The Connect project the extension is open in ("local-dev" when opened outside Connect for testing). */
@@ -745,13 +749,123 @@ function renderBaseConnection() {
     </details>`;
 }
 
+// ------------------------------------------------------------------ monthly reports
+const REPORT_NAME = 'NTRIP Caster Monthly Report';
+const reportFileName = (mount: string, ext: string) => `${REPORT_NAME} - ${mount}.${ext}`;
+let reportsBusy = false;
+
+/** Fetches a file from the caster (with this project's sign-in). */
+async function apiBlob(method: string, path: string, body?: unknown): Promise<Blob> {
+  const base = settings.casterUrl.replace(/\/+$/, '');
+  const res = await fetch(base + path, {
+    method,
+    headers: { Authorization: `Bearer ${token()}`, 'X-Connect-Project': projectId(), 'X-Connect-Project-Name': encodeURIComponent(projectName()), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
+  return res.blob();
+}
+
+/**
+ * Saves reports the caster has made into the project's top folder, oldest month first, always under the same
+ * name per mountpoint so Trimble Connect keeps each month as a version. Runs when a project admin opens the extension.
+ */
+async function syncReports() {
+  if (!app.project?.isAdmin || reportsBusy) return;
+  reportsBusy = true;
+  try {
+    const r = (await api('GET', '/api/reports')) as unknown as { reports: typeof app.reports };
+    app.reports = r.reports;
+    renderBases();
+    const pending = app.reports.filter((x) => !x.uploadedAt).sort((a, b) => a.month.localeCompare(b.month) || a.mount.localeCompare(b.mount));
+    if (!pending.length) return;
+    if (!projectFiles) {
+      app.reportStatus = `${pending.length} report${pending.length === 1 ? '' : 's'} will be saved to the project when the extension is opened in Trimble Connect.`;
+      renderBases();
+      return;
+    }
+    const root = await projectFiles.root();
+    for (const x of pending) {
+      app.reportStatus = `Saving the ${x.month} report for ${x.mount} to the project…`;
+      renderBases();
+      const enc = encodeURIComponent(x.mount);
+      const pdf = await apiBlob('GET', `/api/reports/${x.month}/${enc}.pdf`);
+      const csv = await apiBlob('GET', `/api/reports/${x.month}/${enc}.csv`);
+      await projectFiles.writeFile(root.id, reportFileName(x.mount, 'pdf'), pdf, 'application/pdf');
+      await projectFiles.writeFile(root.id, reportFileName(x.mount, 'csv'), csv, 'text/csv');
+      await api('POST', `/api/reports/${x.month}/${enc}/uploaded`);
+      x.uploadedAt = new Date().toISOString();
+    }
+    app.reportStatus = `Saved ${pending.length} report${pending.length === 1 ? '' : 's'} to the project.`;
+  } catch (err) {
+    app.reportStatus = `Couldn't save the monthly report to the project: ${(err as Error).message}. It will be tried again next time.`;
+    console.warn('[ntrip] report upload failed', err);
+  } finally {
+    reportsBusy = false;
+    renderBases();
+  }
+}
+
+function renderReports() {
+  if (!app.project?.isAdmin) return '';
+  const recent = [...app.reports].sort((a, b) => b.month.localeCompare(a.month) || a.mount.localeCompare(b.mount)).slice(0, 8);
+  const monthName = (m: string) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5) - 1, 15)).toLocaleDateString([], { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return `
+    <details class="card reports-card"${app.reportsOpen ? ' open' : ''}>
+      <summary><b>Monthly reports</b><span class="hint">${recent.length ? esc(monthName(recent[0].month)) : 'first one after this month ends'}</span></summary>
+      <p class="card-sub">A report for each mountpoint is made just after midnight on the 1st and saved in the project as <b>${esc(REPORT_NAME)} - &lt;mountpoint&gt;</b> (PDF and CSV). Each month becomes a new version of the same file, so earlier months are in the file's version history in Connect.</p>
+      ${app.reportStatus ? `<p class="card-sub">${esc(app.reportStatus)}</p>` : ''}
+      ${recent.length ? `<table class="mini-table"><tbody>${recent.map((r) => `<tr><td>${esc(monthName(r.month))}</td><td>${esc(r.mount)}</td>
+        <td>${r.uploadedAt ? '<span class="sub">in project</span>' : '<span class="sub">waiting to be saved</span>'}</td>
+        <td><button class="link-btn" data-report-pdf="${esc(r.month)}|${esc(r.mount)}">PDF</button> <button class="link-btn" data-report-csv="${esc(r.month)}|${esc(r.mount)}">CSV</button></td></tr>`).join('')}</tbody></table>` : ''}
+      <div class="actions" style="margin-top:6px"><button class="link-btn" data-report-preview>Preview this month so far</button></div>
+    </details>`;
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+}
+
+$('#tab-bases').addEventListener('toggle', (e) => {
+  const d = e.target as HTMLDetailsElement;
+  if (d.classList?.contains('reports-card')) app.reportsOpen = d.open;
+}, true);
+$('#tab-bases').addEventListener('click', async (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-report-pdf], [data-report-csv], [data-report-preview]');
+  if (!t) return;
+  const label = t.textContent;
+  t.textContent = 'Loading…';
+  try {
+    if (t.hasAttribute('data-report-preview')) {
+      const mount = app.mountpoints[0]?.name || '';
+      saveBlob(await apiBlob('POST', '/api/reports/preview', { mount }), `${REPORT_NAME} - ${mount || 'preview'} (month to date).pdf`);
+    } else {
+      const csv = t.hasAttribute('data-report-csv');
+      const [month, mount] = (t.dataset.reportPdf || t.dataset.reportCsv || '').split('|');
+      saveBlob(await apiBlob('GET', `/api/reports/${month}/${encodeURIComponent(mount)}.${csv ? 'csv' : 'pdf'}`), `${REPORT_NAME} - ${mount} ${month}.${csv ? 'csv' : 'pdf'}`);
+    }
+  } catch (err) {
+    alert((err as Error).message);
+  } finally {
+    t.textContent = label;
+  }
+});
+// Check for a new month's reports now and then while the extension stays open
+setInterval(() => { if (app.ws && app.project?.isAdmin) void syncReports(); }, 30 * 60_000);
+
 function renderBases() {
   const el = $('#tab-bases');
   if (!app.mountpoints.length) {
-    morph(el, `${renderBaseConnection()}${renderReceivers()}<div class="empty">No bases in this project yet.</div>`);
+    morph(el, `${renderBaseConnection()}${renderReports()}${renderReceivers()}<div class="empty">No bases in this project yet.</div>`);
     return;
   }
-  morph(el, renderBaseConnection() + renderReceivers() + app.mountpoints
+  morph(el, renderBaseConnection() + renderReports() + renderReceivers() + app.mountpoints
     .map(
       (m) => `
     <div class="card">
@@ -884,6 +998,10 @@ function describe(ev: LogEvent) {
     case 'device.updated': return `Login ${ev.serial} updated (${((ev.fields as string[]) || []).join(', ')}) by ${ev.by}`;
     case 'device.removed': return `Login ${ev.serial} deleted by ${ev.by}`;
     case 'mountpoint.removed': return `Mountpoint ${ev.mount} removed by ${ev.by}`;
+    case 'mountpoint.position_changed': return `Base on ${ev.mount} moved ${ev.movedM} m${ev.heightChangeM ? ` (height ${Number(ev.heightChangeM) > 0 ? '+' : ''}${ev.heightChangeM} m)` : ''}, from its data`;
+    case 'mountpoint.position_detected': return `Base position for ${ev.mount} received from its data`;
+    case 'report.generated': return `Monthly report for ${ev.mount} (${ev.month}) ready`;
+    case 'report.uploaded': return `Monthly report for ${ev.mount} (${ev.month}) saved to the project by ${ev.by}`;
     case 'mountpoint.position_set': return `Position of ${ev.mount} set by ${ev.by}`;
     case 'mountpoint.position_cleared': return `Set position of ${ev.mount} cleared by ${ev.by}`;
     case 'receiver.added': return `Base receiver ${ev.name || ev.receiver} added by ${ev.by}`;
@@ -1005,6 +1123,8 @@ function handleMessage(msg: CasterMessage) {
     app.receivers = s.receivers ?? [];
     app.project = msg.project;
     applyRole();
+    shareGeoWithCaster();
+    void syncReports();
     if (viewOnly()) setPill('on', 'Live · view only');
     renderAll();
   } else if (msg.type === 'tick') {
@@ -1213,6 +1333,24 @@ $('#deviceList').addEventListener('click', async (e) => {
     }
   }
 });
+
+// ------------------------------------------------------------------ project coordinate system for the caster's monthly reports
+let geoShared = '';
+let geoTimer: number | undefined;
+/** Tells the caster the project's coordinate system and geoid, so its reports give the base in project coordinates. */
+function shareGeoWithCaster() {
+  window.clearTimeout(geoTimer);
+  geoTimer = window.setTimeout(() => {
+    if (!app.project?.isAdmin || !app.ws) return;
+    const p = projectProj4();
+    const g = projectGeoid();
+    const body = { crsName: getProjectCrsName() || p?.code || null, code: p?.code || null, proj4: p?.proj4 || null, geoid: g ? { name: g.name, datum: g.datum, file: g.file } : null };
+    const key = JSON.stringify(body);
+    if (key === geoShared || (!body.proj4 && !body.geoid)) return;
+    void api('POST', '/api/project/geo', body).then(() => { geoShared = key; }).catch((err) => console.warn('[ntrip] could not share the coordinate system with the caster', err));
+  }, 2000);
+}
+onGeoChange(shareGeoWithCaster);
 
 // ------------------------------------------------------------------ email a login's details to its operator
 const emailDlg = $<HTMLDialogElement>('#emailDlg');

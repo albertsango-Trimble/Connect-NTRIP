@@ -153,6 +153,12 @@ In **Logins**, each login has an **Email** button, and **Email all** sends every
 
 Put the SMTP password in the service's environment rather than the file: `sudo systemctl edit connect-ntrip`, add `[Service]` and `Environment=EMAIL_PASS=...`, then restart. Use port 587 (Lightsail blocks 25). Microsoft 365 needs SMTP AUTH enabled for that mailbox.
 
+## 3b. Monthly reports
+
+Just after midnight on the 1st (in `reportTimeZone`, default `Australia/Sydney`), the caster makes a report for every mountpoint that was used in the month before: a PDF and a CSV of every session. The next time a project admin opens the extension in Connect, they are saved in the project's top folder as **NTRIP Caster Monthly Report - <mountpoint>.pdf / .csv**. The names never change, so each month becomes a new version of the same file and Connect's version history holds the earlier months.
+
+The PDF covers: key figures; the base (format, MSM level, satellite systems, position in the project coordinate system and AHD, any position changes); availability with a day-by-day strip and every outage; each machine's sessions, hours, fix and data; hours by company; machine-hours per day; connection quality (ping, time Excellent/Good/Fair/Poor, late corrections); refused logins; and changes made to the project. **Bases → Monthly reports** lists them, downloads any month again, and previews the current month so far. Reports are also kept on the server in `/var/lib/connect-ntrip/projects/<project>/reports/`.
+
 ## 4. Install the extension in Trimble Connect
 
 1. Push this repo to GitHub as `albertsango-Trimble/Connect-NTRIP`. In the repo's **Settings → Pages**, set Source to **GitHub Actions**; the included workflow builds `extension/` and publishes it.
