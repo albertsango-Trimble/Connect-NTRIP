@@ -193,6 +193,67 @@ export class ProjectFiles {
     return (await this.list(folderId)).find((i) => !i.isFolder && i.name.toLowerCase() === name.toLowerCase());
   }
 
+  /** Folders inside a folder. */
+  async findFolder(parentId: string, name: string): Promise<ProjectItem | undefined> {
+    return (await this.list(parentId)).find((i) => i.isFolder && i.name.toLowerCase() === name.toLowerCase());
+  }
+
+  /** The folder of that name in `parentId`, created if it isn't there. */
+  async ensureFolder(parentId: string, name: string): Promise<string> {
+    const found = await this.findFolder(parentId, name);
+    if (found) return found.id;
+    const made = (await this.post('/folders', { name, parentId })) as { id?: string };
+    if (!made.id) throw new Error("Trimble Connect didn't return the new folder");
+    return made.id;
+  }
+
+  /** Ids of the project's administrators (role ADMIN in the project team). */
+  async adminIds(): Promise<string[]> {
+    const reply = (await this.getJson(`/projects/${encodeURIComponent(this.projectId)}/users`)) as unknown;
+    const rows = Array.isArray(reply) ? reply : ((reply as { items?: unknown[] } | null)?.items ?? []);
+    return (rows as Record<string, unknown>[])
+      .filter((r) => String(r?.role ?? '').toUpperCase() === 'ADMIN' && typeof r.id === 'string' && !/^(inactive|removed|rejected)$/i.test(String(r.status ?? '')))
+      .map((r) => r.id as string);
+  }
+
+  /**
+   * Makes a folder visible to the project's administrators only: No Access for all project members, Full Access
+   * for each admin, not inherited from the parent. Returns true when it changed anything.
+   */
+  async restrictToAdmins(folderId: string): Promise<boolean> {
+    const admins = await this.adminIds();
+    if (!admins.length) throw new Error("couldn't read the project's administrators");
+    const path = `/folders/fs/${encodeURIComponent(folderId)}/permissions`;
+    const current = ((await this.getJson(path).catch(() => ({}))) ?? {}) as { acl?: Record<string, string[]>; inheritance?: boolean };
+    const want = { NO_ACCESS: ['tc-groups:*'], FULL_ACCESS: [...admins].sort() };
+    const have = current.acl ?? {};
+    const same = current.inheritance === false && JSON.stringify([...(have.NO_ACCESS ?? [])].sort()) === JSON.stringify(want.NO_ACCESS)
+      && JSON.stringify([...(have.FULL_ACCESS ?? [])].sort()) === JSON.stringify(want.FULL_ACCESS) && !(have.READ ?? []).length;
+    if (same) return false;
+    await this.send('PATCH', path, { acl: want, inheritance: false });
+    return true;
+  }
+
+  /** Moves a file into another folder (keeping its versions). */
+  async move(fileId: string, folderId: string): Promise<void> {
+    await this.send('PATCH', `/files/${encodeURIComponent(fileId)}`, { parentId: folderId });
+  }
+
+  private async send(method: string, path: string, body?: unknown): Promise<unknown> {
+    const res = await fetch(`${await this.host()}${API}${path}`, {
+      method,
+      headers: { ...(this.headers() as Record<string, string>), 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Trimble Connect replied ${res.status} for ${path}${text ? `: ${text.slice(0, 160)}` : ''}`);
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      return {};
+    }
+  }
+
   private async post(path: string, body?: unknown): Promise<unknown> {
     const res = await fetch(`${await this.host()}${API}${path}`, {
       method: 'POST',

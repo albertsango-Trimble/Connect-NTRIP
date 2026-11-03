@@ -243,6 +243,7 @@ export interface LoginExport {
 export type CasterMessage =
   | { type: 'hello'; user: { email: string; name: string }; project: ProjectInfo; snapshot: Snapshot; devices: Device[] }
   | { type: 'project'; project: ProjectInfo }
+  | { type: 'shared-map' }
   | { type: 'tick'; serverTime: number; positions: { id: string; gga: Gga; ggaAt: number; point: TrackPoint | null }[]; mountpoints: Mountpoint[]; rovers: Rover[]; receivers?: Receiver[] }
   | { type: 'event'; event: LogEvent }
   | { type: 'devices'; devices: Device[] }

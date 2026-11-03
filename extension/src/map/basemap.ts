@@ -206,7 +206,7 @@ export function createBasemap(map: maplibregl.Map, container: HTMLElement, optio
   const shareRow = q<HTMLLabelElement>('.geotiff-share');
   const shareBox = q<HTMLInputElement>('.geotiff-share-box');
   const shareNote = q<HTMLSpanElement>('.geotiff-share-note');
-  const SHARE_TEXT = ' Share these GeoTIFFs with everyone on the project (saved as ntrip-caster-map.json in the project files)';
+  const SHARE_TEXT = ' Share these GeoTIFFs with everyone on the project (kept on the caster; project admins only)';
   const refreshSharing = () => {
     const sharing = options.sharing;
     shareRow.hidden = !sharing;

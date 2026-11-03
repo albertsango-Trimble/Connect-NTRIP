@@ -9,7 +9,7 @@ import { RangeClient } from './core/geotiffTiles';
 import { fromProject, getEpsgCode, getProjectCrsName, initGeoreference, onGeoChange, projectProj4, toProject } from './core/geo';
 import { geoidSeparation, onGeoidValue, projectGeoid } from './core/geoid';
 import { chooseSource } from './ui/sourceDialog';
-import { loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, saveShared, saveSharedPicture, type SharedMap } from './connect/sharedSession';
+import { EXT_FOLDER, extensionFolder, loadProjectSettings, loadShared, loadSharedPicture, saveProjectSettings, type SharedMap } from './connect/sharedSession';
 import type { LoginEmail } from './types';
 import type { CasterMessage, Device, HistoryRecord, HistoryReply, LogEvent, Mountpoint, Profile, Receiver, Rover, SessionRecord, ProjectInfo, LoginExport } from './types';
 
@@ -139,7 +139,7 @@ let shareError: string | null = null;
 
 /** Saves the base maps into the project a few seconds after they change, once sharing has been turned on. */
 function scheduleShare() {
-  if (!currentProjectId || !projectFiles || !isSharing(currentProjectId)) return;
+  if (!currentProjectId || !app.project?.isAdmin || !isSharing(currentProjectId)) return;
   window.clearTimeout(shareTimer);
   shareTimer = window.setTimeout(() => void shareNow(), 3000);
 }
@@ -162,17 +162,28 @@ const recallSharedTiffs = (projectId: string): string[] => {
   }
 };
 
+/** Saves a reduced GeoTIFF picture on the caster, where every project member can load it. */
+async function putPicture(id: string, picture: Blob) {
+  const base = settings.casterUrl.replace(/\/+$/, '');
+  const res = await fetch(`${base}/api/project/shared-pictures/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token()}`, 'X-Connect-Project': projectId(), 'X-Connect-Project-Name': encodeURIComponent(projectName()), 'Content-Type': 'image/png' },
+    body: picture,
+  });
+  if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || `HTTP ${res.status}`);
+}
+
 async function shareNow(): Promise<boolean> {
-  if (!projectFiles || !currentProjectId) return false;
+  if (!currentProjectId || !app.project?.isAdmin) return false;
   try {
     // Project files are read in place; only a reduced picture of a file from someone's computer needs uploading, once.
     const tiffs = basemap.geoTiffs();
     for (const { info, picture } of tiffs) {
       if (!picture || uploadedPictures.has(info.id)) continue;
-      await saveSharedPicture(projectFiles, info.id, picture);
+      await putPicture(info.id, picture);
       uploadedPictures.add(info.id);
     }
-    await saveShared(projectFiles, { version: 1, savedAt: Date.now(), geotiffs: tiffs.map((t) => t.info) });
+    await api('PUT', '/api/project/shared-map', { version: 1, savedAt: Date.now(), geotiffs: tiffs.map((t) => t.info) });
     rememberSharedTiffs(currentProjectId, tiffs.map((t) => t.info.id));
     shareError = null;
     return true;
@@ -184,7 +195,7 @@ async function shareNow(): Promise<boolean> {
 }
 
 /** Adds the GeoTIFF base maps others shared, and drops ones that were removed from the shared list. */
-async function restoreSharedGeoTiffs(project: ProjectFiles, projectId: string, shared: SharedMap) {
+async function restoreSharedGeoTiffs(projectId: string, shared: SharedMap, picture: (id: string) => Promise<Blob | null>) {
   await basemap.loaded();
   const listed = shared.geotiffs ?? [];
   const had = recallSharedTiffs(projectId);
@@ -200,9 +211,9 @@ async function restoreSharedGeoTiffs(project: ProjectFiles, projectId: string, s
         await basemap.addSharedGeoTiff(info, null);
         continue;
       }
-      const picture = await loadSharedPicture(project, info.id);
-      if (picture) await basemap.addSharedGeoTiff(info, picture);
-      else console.warn('[ntrip] the picture for shared GeoTIFF', info.name, 'is missing from the project');
+      const pic = await picture(info.id);
+      if (pic) await basemap.addSharedGeoTiff(info, pic);
+      else console.warn('[ntrip] the picture for shared GeoTIFF', info.name, 'is missing');
     } catch (err) {
       console.warn('[ntrip] could not load the shared GeoTIFF', info.name, err);
     }
@@ -240,9 +251,10 @@ const basemap = createBasemap(map, $('.map-wrap'), {
   geoTiffsChanged: () => scheduleShare(),
   sharing: {
     isOn: () => !!currentProjectId && isSharing(currentProjectId),
-    available: () => !!currentProjectId && !!projectFiles,
+    available: () => !!currentProjectId && !!app.project?.isAdmin,
     async set(on) {
-      if (!currentProjectId || !projectFiles) return 'open the extension inside a Trimble Connect project first';
+      if (!currentProjectId) return 'open the extension inside a Trimble Connect project first';
+      if (!app.project?.isAdmin) return 'only project admins can share base maps';
       if (on && !(await shareNow())) return shareError ?? 'unknown error';
       try {
         localStorage.setItem(SHARE_KEY(currentProjectId), on ? '1' : '0');
@@ -754,6 +766,50 @@ function renderBaseConnection() {
     </details>`;
 }
 
+// ------------------------------------------------------------------ the extension's files in the project
+let sharedLoaded = false;
+/** Base maps shared with the project, from the caster (every member can read them). */
+async function loadSharedMaps() {
+  try {
+    let shared = (await api('GET', '/api/project/shared-map')) as unknown as SharedMap | null;
+    // Moving from the old place: base maps shared as files in the Connect project are copied to the caster once
+    if ((!shared || !Array.isArray(shared.geotiffs)) && app.project?.isAdmin && projectFiles) {
+      const folder = await extensionFolder(projectFiles).catch(() => null);
+      const old = (await loadShared(projectFiles, folder?.id).catch(() => null)) || (await loadShared(projectFiles).catch(() => null));
+      if (old?.geotiffs?.length) {
+        for (const info of old.geotiffs) {
+          if (info.item && info.tiles) continue;
+          const pic = (await loadSharedPicture(projectFiles, info.id, folder?.id).catch(() => null)) || (await loadSharedPicture(projectFiles, info.id).catch(() => null));
+          if (pic) await putPicture(info.id, pic);
+        }
+        await api('PUT', '/api/project/shared-map', old);
+        shared = old;
+      }
+    }
+    if (!shared || !Array.isArray(shared.geotiffs)) return;
+    if (!sharedLoaded || !app.project?.isAdmin) {
+      sharedLoaded = true;
+      await restoreSharedGeoTiffs(projectId(), shared, (id) => apiBlob('GET', `/api/project/shared-pictures/${encodeURIComponent(id)}`).catch(() => null));
+    }
+  } catch (err) {
+    console.warn('[ntrip] could not load the shared base maps', err);
+  }
+}
+
+let folderStatus = '';
+/** Admins: makes sure the extension's admins-only folder exists, is restricted and holds its files. */
+async function setUpProjectFiles() {
+  if (!app.project?.isAdmin || !projectFiles) return;
+  try {
+    const f = await extensionFolder(projectFiles);
+    folderStatus = f.restricted ? '' : `Warning: ${f.warning}`;
+    if (f.moved.length) console.info(`[ntrip] moved ${f.moved.length} file(s) into ${EXT_FOLDER}:`, f.moved);
+  } catch (err) {
+    folderStatus = `Couldn't set up the "${EXT_FOLDER}" folder: ${(err as Error).message}`;
+  }
+  renderBases();
+}
+
 // ------------------------------------------------------------------ monthly reports
 const REPORT_NAME = 'NTRIP Caster Monthly Report';
 const reportFileName = (mount: string, ext: string) => `${REPORT_NAME} - ${mount}.${ext}`;
@@ -789,15 +845,15 @@ async function syncReports() {
       renderBases();
       return;
     }
-    const root = await projectFiles.root();
+    const folder = await extensionFolder(projectFiles);
     for (const x of pending) {
       app.reportStatus = `Saving the ${x.month} report for ${x.mount} to the project…`;
       renderBases();
       const enc = encodeURIComponent(x.mount);
       const pdf = await apiBlob('GET', `/api/reports/${x.month}/${enc}.pdf`);
       const csv = await apiBlob('GET', `/api/reports/${x.month}/${enc}.csv`);
-      await projectFiles.writeFile(root.id, reportFileName(x.mount, 'pdf'), pdf, 'application/pdf');
-      await projectFiles.writeFile(root.id, reportFileName(x.mount, 'csv'), csv, 'text/csv');
+      await projectFiles.writeFile(folder.id, reportFileName(x.mount, 'pdf'), pdf, 'application/pdf');
+      await projectFiles.writeFile(folder.id, reportFileName(x.mount, 'csv'), csv, 'text/csv');
       await api('POST', `/api/reports/${x.month}/${enc}/uploaded`);
       x.uploadedAt = new Date().toISOString();
     }
@@ -818,7 +874,8 @@ function renderReports() {
   return `
     <details class="card reports-card"${app.reportsOpen ? ' open' : ''}>
       <summary><b>Monthly reports</b><span class="hint">${recent.length ? esc(monthName(recent[0].month)) : 'first one after this month ends'}</span></summary>
-      <p class="card-sub">A report for each mountpoint is made just after midnight on the 1st and saved in the project as <b>${esc(REPORT_NAME)} - &lt;mountpoint&gt;</b> (PDF and CSV). Each month becomes a new version of the same file, so earlier months are in the file's version history in Connect.</p>
+      <p class="card-sub">A report for each mountpoint is made just after midnight on the 1st and saved in the project's <b>${esc(EXT_FOLDER)}</b> folder (project admins only) as <b>${esc(REPORT_NAME)} - &lt;mountpoint&gt;</b> (PDF and CSV). Each month becomes a new version of the same file, so earlier months are in the file's version history in Connect.</p>
+      ${folderStatus ? `<p class="warn">${esc(folderStatus)}</p>` : ''}
       ${app.reportStatus ? `<p class="card-sub">${esc(app.reportStatus)}</p>` : ''}
       ${recent.length ? `<table class="mini-table"><tbody>${recent.map((r) => `<tr><td>${esc(monthName(r.month))}</td><td>${esc(r.mount)}</td>
         <td>${r.uploadedAt ? '<span class="sub">in project</span>' : '<span class="sub">waiting to be saved</span>'}</td>
@@ -1138,7 +1195,8 @@ function handleMessage(msg: CasterMessage) {
     app.project = msg.project;
     applyRole();
     shareGeoWithCaster();
-    void syncReports();
+    void setUpProjectFiles().then(() => syncReports());
+    void loadSharedMaps();
     if (viewOnly()) setPill('on', 'Live · view only');
     renderAll();
   } else if (msg.type === 'tick') {
@@ -1167,6 +1225,8 @@ function handleMessage(msg: CasterMessage) {
     app.log.push(msg.event);
     renderLog();
     if (msg.event.type === 'rover.connected' || msg.event.type === 'rover.disconnected') renderDevices();
+  } else if (msg.type === 'shared-map') {
+    if (!app.project?.isAdmin) void loadSharedMaps();
   } else if (msg.type === 'project') {
     if (app.project && !app.project.isAdmin) return;
     app.project = msg.project;
@@ -2348,13 +2408,6 @@ connectToHost()
     void initGeoreference(host.crs);
     let first = true;
     host.onToken(() => {
-      if (first) {
-        // Base maps shared with the project are read once there is a token to read project files with.
-        const project = projectFiles!;
-        void loadShared(project)
-          .then((shared) => shared && restoreSharedGeoTiffs(project, host.projectId, shared))
-          .catch((err) => console.warn('[ntrip] could not read the base maps shared with the project', err));
-      }
       if (first) {
         first = false;
         // Use the caster saved with the project (it may have changed since this browser last opened it)

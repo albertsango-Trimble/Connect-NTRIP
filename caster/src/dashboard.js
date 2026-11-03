@@ -13,6 +13,7 @@ import { UserError, normaliseSerial } from './devices.js';
 import { isReceiverHost, startLink } from './webui.js';
 import { compose, emailEnabled, sendEmail } from './credentials.js';
 import fs from 'node:fs';
+import path from 'node:path';
 import { buildMonth, listReports, markUploaded, monthOf, monthRange, previousMonth, reportFile } from './reports.js';
 
 const AUTH_CACHE_MS = 5 * 60 * 1000;
@@ -213,6 +214,46 @@ export function startDashboard({ config, state, tokens, receiverStore }) {
       // GET /api/snapshot   GET /api/mountpoints
       if (req.method === 'GET' && url.pathname === '/api/snapshot') return send(res, 200, admin ? state.snapshot(P) : viewerSnapshot(P));
       if (req.method === 'GET' && url.pathname === '/api/mountpoints') return send(res, 200, admin ? state.mountpointViews(P) : viewerMounts(P));
+
+      // Base maps shared with the project (GeoTIFF list and reduced pictures). Every member can read them, so they
+      // live here rather than in the admins-only folder in Connect; only admins change them.
+      //   GET/PUT /api/project/shared-map      GET/PUT /api/project/shared-pictures/:id
+      const sharedDir = path.join(projects.projectDir(P), 'shared-map');
+      if (url.pathname === '/api/project/shared-map') {
+        const f = path.join(sharedDir, 'map.json');
+        if (req.method === 'GET') return send(res, 200, fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null);
+        if (req.method === 'PUT') {
+          if (!admin) throw new UserError('Only project admins can change the shared base maps', 403);
+          const body = await readJson(req, 4 * 1024 * 1024);
+          if (!body || !Array.isArray(body.geotiffs)) throw new UserError('Expected { geotiffs: [...] }');
+          fs.mkdirSync(sharedDir, { recursive: true });
+          fs.writeFileSync(f + '.tmp', JSON.stringify({ ...body, savedBy: user.email, savedAt: Date.now() }), { mode: 0o600 });
+          fs.renameSync(f + '.tmp', f);
+          broadcast({ type: 'shared-map' }, P);
+          return send(res, 200, { ok: true });
+        }
+      }
+      if (parts[1] === 'project' && parts[2] === 'shared-pictures' && parts[3]) {
+        const id = decodeURIComponent(parts[3]);
+        if (!/^[A-Za-z0-9_\-]{1,80}$/.test(id)) throw new UserError('Bad picture id');
+        const f = path.join(sharedDir, `${id}.png`);
+        if (req.method === 'GET') {
+          if (!fs.existsSync(f)) return send(res, 404, { error: 'Picture not found' });
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=86400' });
+          return fs.createReadStream(f).pipe(res);
+        }
+        if (req.method === 'PUT') {
+          if (!admin) throw new UserError('Only project admins can change the shared base maps', 403);
+          const chunks = []; let size = 0;
+          for await (const c of req) { size += c.length; if (size > 40 * 1024 * 1024) throw new UserError('Picture too large', 413); chunks.push(c); }
+          const buf = Buffer.concat(chunks);
+          if (buf.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new UserError('Expected a PNG picture');
+          fs.mkdirSync(sharedDir, { recursive: true });
+          fs.writeFileSync(f + '.tmp', buf, { mode: 0o600 });
+          fs.renameSync(f + '.tmp', f);
+          return send(res, 200, { ok: true });
+        }
+      }
 
       // Everything below manages the project: project admins only
       if (!admin) throw new UserError('Only project admins can do this', 403);

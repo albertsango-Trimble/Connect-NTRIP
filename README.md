@@ -153,9 +153,15 @@ In **Logins**, each login has an **Email** button, and **Email all** sends every
 
 Put the SMTP password in the service's environment rather than the file: `sudo systemctl edit connect-ntrip`, add `[Service]` and `Environment=EMAIL_PASS=...`, then restart. Use port 587 (Lightsail blocks 25). Microsoft 365 needs SMTP AUTH enabled for that mailbox.
 
+## 3a-2. The extension's folder in the project
+
+Everything the extension saves in a Connect project (the caster address setting and the monthly reports) goes in a folder called **NTRIP Caster Extension**. The first time a project admin opens the extension, it creates the folder and sets its permissions to **No Access** for all project members and **Full Access** for each project admin, not inherited from the top folder. It also moves in any files it saved in the top folder before, keeping their versions. Each time an admin opens it, the permissions are checked again, so new admins get access. If Connect refuses the permission change, **Bases → Monthly reports** shows a warning; set the folder to No Access for other members in Connect's folder permissions yourself.
+
+Base maps shared with the project (GeoTIFFs) are kept on the caster instead, because every project member's map needs them. Only project admins can change them.
+
 ## 3b. Monthly reports
 
-Just after midnight on the 1st (in `reportTimeZone`, default `Australia/Sydney`), the caster makes a report for every mountpoint that was used in the month before: a PDF and a CSV of every session. The next time a project admin opens the extension in Connect, they are saved in the project's top folder as **NTRIP Caster Monthly Report - <mountpoint>.pdf / .csv**. The names never change, so each month becomes a new version of the same file and Connect's version history holds the earlier months.
+Just after midnight on the 1st (in `reportTimeZone`, default `Australia/Sydney`), the caster makes a report for every mountpoint that was used in the month before: a PDF and a CSV of every session. The next time a project admin opens the extension in Connect, they are saved in the project's **NTRIP Caster Extension** folder as **NTRIP Caster Monthly Report - <mountpoint>.pdf / .csv**. The names never change, so each month becomes a new version of the same file and Connect's version history holds the earlier months.
 
 The PDF covers: key figures; the base (format, MSM level, satellite systems, position in the project coordinate system and AHD, any position changes); availability with a day-by-day strip and every outage; each machine's sessions, hours, fix and data; hours by company; machine-hours per day; connection quality (ping, time Excellent/Good/Fair/Poor, late corrections); refused logins; and changes made to the project. **Bases → Monthly reports** lists them, downloads any month again, and previews the current month so far. Reports are also kept on the server in `/var/lib/connect-ntrip/projects/<project>/reports/`.
 
