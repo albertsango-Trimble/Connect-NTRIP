@@ -31,6 +31,9 @@ export function parseSs(text) {
     const num = k => { const m = line.match(new RegExp(`(?:^|\\s)${k}:([\\d.]+)`)); return m ? Number(m[1]) : undefined; };
     const rtt = line.match(/\srtt:([\d.]+)\/([\d.]+)/);
     if (rtt) { cur.rttMs = Number(rtt[1]); cur.rttVarMs = Number(rtt[2]); }
+    // Round trip estimated from the data a peer sends us (a base mostly sends, so its rtt alone can be stale)
+    const rcv = line.match(/\srcv_rtt:([\d.]+)/);
+    if (rcv) cur.rcvRttMs = Number(rcv[1]);
     const re = line.match(/\sretrans:\d+\/(\d+)/);
     cur.retrans = re ? Number(re[1]) : 0;
     cur.segsOut = num('data_segs_out') ?? num('segs_out') ?? 0;
@@ -65,21 +68,82 @@ export function grade({ rttMs, lossPct, stalled, sendQ, ageOfCorrections }) {
   return { bars, label: ['', 'Poor', 'Fair', 'Good', 'Excellent'][bars], reasons: why };
 }
 
+/** Grade for a base's connection: how late its epochs arrive, epochs missed, gaps and corrupt data. */
+export function gradeBase({ latencyMs, missedPct, gapMs, crcPct, pingMs }) {
+  let bars = 4;
+  const why = [];
+  const cap = (b, reason) => { if (b < bars) bars = b; why.push(reason); };
+  if (gapMs > 5000) cap(1, `no data for ${Math.round(gapMs / 1000)} s`);
+  else if (gapMs > 2500) cap(2, `data stalling (${(gapMs / 1000).toFixed(1)} s gap)`);
+  if (latencyMs != null) {
+    if (latencyMs > 2000) cap(1, `corrections arriving ${(latencyMs / 1000).toFixed(1)} s late`);
+    else if (latencyMs > 1000) cap(2, `corrections arriving ${(latencyMs / 1000).toFixed(1)} s late`);
+    else if (latencyMs > 500) cap(3, `${latencyMs} ms latency`);
+  }
+  if (missedPct != null) {
+    if (missedPct > 15) cap(1, `${missedPct.toFixed(1)}% of epochs missing`);
+    else if (missedPct > 5) cap(2, `${missedPct.toFixed(1)}% of epochs missing`);
+    else if (missedPct > 1) cap(3, `${missedPct.toFixed(1)}% of epochs missing`);
+  }
+  if (crcPct != null && crcPct > 0.5) cap(2, `${crcPct.toFixed(1)}% of data corrupted`);
+  if (pingMs != null) {
+    if (pingMs > 1000) cap(2, `slow link (${Math.round(pingMs)} ms ping)`);
+    else if (pingMs > 400) cap(3, `${Math.round(pingMs)} ms ping`);
+  }
+  return { bars, label: ['', 'Poor', 'Fair', 'Good', 'Excellent'][bars], reasons: why };
+}
+
+function updateBase(src, s, now) {
+  const r = src.monitor?.rtcm;
+  const lat = r?.latencyStats?.() || null;
+  // Epochs missed and corrupt frames since the last look, smoothed over about half a minute
+  const prev = src.baseRaw;
+  const cur = { epochs: r?.epochs || 0, missed: r?.missed || 0, crc: r?.crcErrors || 0, frames: r?.frames || 0 };
+  src.baseRaw = cur;
+  let missedPct = src.net?.missedPct ?? null;
+  let crcPct = src.net?.crcPct ?? null;
+  if (prev) {
+    const exp = (cur.epochs - prev.epochs) + (cur.missed - prev.missed);
+    if (exp > 0) { const v = ((cur.missed - prev.missed) / exp) * 100; missedPct = missedPct == null ? v : missedPct * 0.8 + v * 0.2; }
+    const fr = (cur.frames - prev.frames) + (cur.crc - prev.crc);
+    if (fr > 0) { const v = ((cur.crc - prev.crc) / fr) * 100; crcPct = crcPct == null ? v : crcPct * 0.8 + v * 0.2; }
+  }
+  const pingMs = s ? (s.rcvRttMs ?? s.rttMs ?? null) : null;
+  const gapMs = src.lastDataAt ? now - src.lastDataAt : now - src.connectedAt;
+  const graded = gradeBase({ latencyMs: lat?.avgMs ?? null, missedPct, gapMs, crcPct, pingMs });
+  const acc = (src.netAcc ??= { n: 0, latSum: 0, latMax: 0, pingSum: 0, pingN: 0, gradeSec: { excellent: 0, good: 0, fair: 0, poor: 0 } });
+  if (lat) { acc.n++; acc.latSum += lat.avgMs; acc.latMax = Math.max(acc.latMax, lat.maxMs); }
+  if (pingMs != null) { acc.pingN++; acc.pingSum += pingMs; }
+  acc.gradeSec[['', 'poor', 'fair', 'good', 'excellent'][graded.bars]] += EVERY_MS / 1000;
+  src.net = {
+    latencyMs: lat?.avgMs ?? null,
+    latencyMaxMs: lat?.maxMs ?? null,
+    pingMs: pingMs != null ? Math.round(pingMs) : null,
+    missedPct: missedPct == null ? null : Math.round(missedPct * 10) / 10,
+    crcPct: crcPct == null ? null : Math.round(crcPct * 10) / 10,
+    rateHz: r?.interval ? Math.round((1000 / r.interval) * 10) / 10 : null,
+    at: now,
+    ...graded,
+  };
+}
+
 export function startNetStats({ config, state }) {
   let busy = false;
   let warned = false;
   const tick = () => {
-    if (busy || !state.clients.size) return;
+    if (busy || (!state.clients.size && !state.sources.size)) return;
     busy = true;
     execFile('ss', ['-tinH', 'state', 'established', `( sport = :${config.ntripPort} )`], { maxBuffer: 256 * 1024 * 1024, timeout: 10_000 }, (err, stdout) => {
       busy = false;
+      const now = Date.now();
       if (err) {
-        if (!warned) console.warn(`Connection quality not available (could not run ss: ${err.code || err.message})`);
+        if (!warned) console.warn(`Network figures not available (could not run ss: ${err.code || err.message}); base latency still measured from the data`);
         warned = true;
+        for (const src of state.sources.values()) updateBase(src, null, now);
         return;
       }
       const stats = parseSs(stdout);
-      const now = Date.now();
+      for (const src of state.sources.values()) updateBase(src, stats.get(peerKey(src.addr)) || null, now);
       for (const c of state.clients.values()) {
         const s = stats.get(peerKey(c.addr));
         if (!s) continue;

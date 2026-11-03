@@ -86,6 +86,15 @@ export class CasterState extends EventEmitter {
       messageTypes: src.monitor ? src.monitor.messageTypes() : [],
       position: st && Number.isFinite(st.lat) ? { lat: st.lat, lon: st.lon, h: st.h ?? null, from: st.from } : null,
       endReason: reason,
+      // Connection quality over the connection (see netstats.js)
+      net: src.netAcc ? {
+        avgLatencyMs: src.netAcc.n ? Math.round(src.netAcc.latSum / src.netAcc.n) : null,
+        maxLatencyMs: src.netAcc.n ? src.netAcc.latMax : null,
+        avgPingMs: src.netAcc.pingN ? Math.round(src.netAcc.pingSum / src.netAcc.pingN) : null,
+        epochs: src.monitor?.rtcm?.epochs || 0,
+        missedEpochs: src.monitor?.rtcm?.missed || 0,
+        gradeSec: src.netAcc.gradeSec,
+      } : null,
     });
   }
 
@@ -290,14 +299,17 @@ export class CasterState extends EventEmitter {
       for (const m of this.config.mountpoints) if (m.auto && this.sources.has(m.name)) this.sourceView(m);
       for (const s of this.sources.values()) this.checkBasePosition(s);
     }
-    for (const s of this.sources.values()) {
-      s.rateBps = s.bytesIn - s.lastBytes;
-      s.lastBytes = s.bytesIn;
-    }
+    // Rates are averaged over 5 s: bases send in bursts once per epoch, so a 1-second figure flickers
+    const rate = (x, total) => {
+      (x.rateWin ??= []).push(total - x.lastBytes);
+      if (x.rateWin.length > 5) x.rateWin.shift();
+      x.lastBytes = total;
+      return Math.round(x.rateWin.reduce((a, b) => a + b, 0) / x.rateWin.length);
+    };
+    for (const s of this.sources.values()) s.rateBps = rate(s, s.bytesIn);
     const now = Date.now();
     for (const c of this.clients.values()) {
-      c.rateBps = c.bytesOut - c.lastBytes;
-      c.lastBytes = c.bytesOut;
+      c.rateBps = rate(c, c.bytesOut);
       if (c.trail?.buf.length && now - c.trail.flushedAt >= TRAIL_FLUSH_MS) this.flushTrail(c);
     }
     this.emit('tick');
@@ -349,6 +361,7 @@ export class CasterState extends EventEmitter {
       bytesIn: s?.bytesIn || 0,
       rateBps: s?.rateBps || 0,
       messageTypes: s?.monitor ? s.monitor.messageTypes() : [],
+      net: s?.net || null,
       position: this.position(m, station, site),
       manualPosition: this.positions?.get(m.name) || null,
       rovers: [...this.clients.values()].filter(c => c.mount === m.name).length,

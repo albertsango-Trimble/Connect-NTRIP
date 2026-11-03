@@ -62,12 +62,64 @@ export function decodeStationPosition(payload) {
   return { stationId, ecef: { x, y, z }, antennaHeight, ...ecefToLla(x, y, z) };
 }
 
+// GPS time of week now, in ms (GPS time runs ahead of UTC by the leap seconds, 18 since 2017)
+const GPS_EPOCH = Date.UTC(1980, 0, 6);
+const WEEK = 604_800_000;
+const LEAP_MS = 18_000;
+const gpsTowNow = now => (now - GPS_EPOCH + LEAP_MS) % WEEK;
+// MSM messages whose epoch time is a time of week: GPS, Galileo, QZSS (GPS time) and BeiDou (14 s behind GPS)
+const towOffset = t => (t >= 1071 && t <= 1077) || (t >= 1091 && t <= 1097) || (t >= 1111 && t <= 1117) ? 0 : t >= 1121 && t <= 1127 ? 14_000 : null;
+
 export class RtcmMonitor {
   constructor() {
     this.buf = Buffer.alloc(0);
     this.types = new Map(); // type -> count since last reset
     this.frames = 0;
     this.station = null;
+    this.crcErrors = 0;
+    // How late each epoch arrives (from the GNSS time in MSM messages), and epochs missed
+    this.latency = []; // recent samples, ms
+    this.lastEpoch = null;
+    this.interval = null; // usual time between epochs, ms
+    this.epochs = 0;
+    this.missed = 0;
+  }
+
+  /** Called for each MSM message: times the epoch the first time it is seen. */
+  epoch(type, payload, at) {
+    const off = towOffset(type);
+    if (off === null) return;
+    const tow = (getBitsU(payload, 24, 30) + off) % WEEK;
+    if (tow === this.lastEpoch) return; // other messages of the same epoch
+    let late = gpsTowNow(at) - tow;
+    if (late < -WEEK / 2) late += WEEK;
+    if (late > WEEK / 2) late -= WEEK;
+    // Ignore data that isn't live (a replay, or a receiver or server clock that's badly out)
+    if (late > -2000 && late < 120_000) {
+      this.latency.push(Math.max(0, late));
+      if (this.latency.length > 60) this.latency.shift();
+    }
+    if (this.lastEpoch !== null) {
+      let step = tow - this.lastEpoch;
+      if (step < 0) step += WEEK;
+      if (step > 0 && step < 60_000) {
+        // The base's output rate is the shortest step among the last 20 (1 Hz bases: 1000 ms); longer steps are missed epochs
+        (this.steps ??= []).push(step);
+        if (this.steps.length > 20) this.steps.shift();
+        this.interval = Math.max(50, Math.min(...this.steps));
+        const gap = Math.round(step / this.interval) - 1;
+        if (gap > 0 && gap < 600) this.missed += gap;
+      }
+    }
+    this.lastEpoch = tow;
+    this.epochs++;
+  }
+
+  /** Recent delay from the base's epoch time to its arrival here: { avgMs, maxMs } or null. */
+  latencyStats() {
+    if (!this.latency.length) return null;
+    const recent = this.latency.slice(-30);
+    return { avgMs: Math.round(recent.reduce((a, b) => a + b, 0) / recent.length), maxMs: Math.round(Math.max(...recent)), lastMs: Math.round(recent[recent.length - 1]) };
   }
 
   push(data) {
@@ -86,8 +138,11 @@ export class RtcmMonitor {
         this.types.set(type, (this.types.get(type) || 0) + 1);
         this.frames++;
         if (type === 1005 || type === 1006) this.station = decodeStationPosition(payload) || this.station;
+        else if (type >= 1071 && type <= 1137) this.epoch(type, payload, Date.now());
         i = s + total;
       } else {
+        // A frame header whose check fails: corrupted data (counted only once the stream is known to be RTCM)
+        if (this.frames > 10 && len >= 2) this.crcErrors++;
         i = s + 1;
       }
     }

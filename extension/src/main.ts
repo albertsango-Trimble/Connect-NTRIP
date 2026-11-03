@@ -607,12 +607,17 @@ function renderRovers() {
     .join(''));
 }
 
-/** Signal-style bars for a machine's connection quality, with its label. */
-function netBars(r: Rover): string {
+/** Signal-style bars for a machine's or base's connection quality, with its label. */
+function netBars(r: { net?: { bars: number; label: string } | null }): string {
   const n = r.net;
   if (!n) return '<span class="sub">measuring…</span>';
   const bars = [1, 2, 3, 4].map((i) => `<i class="${i <= n.bars ? 'on' : ''}" style="height:${3 + i * 3}px"></i>`).join('');
   return `<span class="netbars q${n.bars}" aria-label="${esc(n.label)}">${bars}</span> ${esc(n.label)}`;
+}
+function baseNetTitle(m: Mountpoint): string {
+  const n = m.net;
+  if (!n) return 'Measured a few seconds after the base connects';
+  return `How well corrections are getting from the base to the caster: latency from the base's own epoch times, missed epochs, gaps and corrupted data.${n.latencyMs == null ? ' This stream has no RTCM MSM epoch times (e.g. CMR/CMRx), so latency comes from the network only.' : ''}${n.reasons.length ? ` ${n.reasons.join('; ')}.` : ' No problems seen.'}`;
 }
 function netTitle(r: Rover): string {
   const n = r.net;
@@ -883,6 +888,15 @@ function renderBases() {
         <div><span>Total in</span><b>${m.online ? bytes(m.bytesIn) : '—'}</b></div>
         <div><span>Last data</span><b>${m.lastDataAt ? `${duration(serverNow() - m.lastDataAt)} ago` : '—'}</b></div>
       </div>
+      ${m.online ? `<div class="grid">
+        <div title="${esc(baseNetTitle(m))}"><span>Connection</span><b>${netBars(m)}</b></div>
+        <div title="How late each epoch arrives at the caster: the GNSS time in the base's RTCM messages compared with the caster's clock${m.net?.latencyMaxMs != null ? `. Worst in the last 30 epochs: ${m.net.latencyMaxMs} ms` : ''}"><span>Latency</span><b>${m.net?.latencyMs != null ? `${m.net.latencyMs} ms` : m.net ? '<span class="sub">not in data</span>' : '—'}</b></div>
+        <div title="Network round trip between the caster and the base"><span>Ping</span><b>${m.net?.pingMs != null ? `${m.net.pingMs} ms` : '—'}</b></div>
+        <div title="Epochs the base didn't deliver recently"><span>Missed epochs</span><b>${m.net?.missedPct != null ? `${m.net.missedPct}%` : '—'}</b></div>
+        <div><span>Output rate</span><b>${m.net?.rateHz != null ? `${m.net.rateHz} Hz` : '—'}</b></div>
+        <div title="Data frames that failed their check (corrupted on the way)"><span>Corrupt data</span><b>${m.net?.crcPct != null ? `${m.net.crcPct}%` : '—'}</b></div>
+      </div>
+      ${m.net && m.net.bars <= 2 && m.net.reasons.length ? `<div class="warn">Base connection weak: ${esc(m.net.reasons.join(', '))}</div>` : ''}` : ''}
       ${positionLines(m)}
       ${m.messageTypes?.length && msmSummary(m.messageTypes) ? `<div class="card-sub" style="margin-top:6px">${esc(msmSummary(m.messageTypes))}</div>` : ''}
       ${m.messageTypes?.length ? `<div class="msgtypes">RTCM messages: ${m.messageTypes.join(', ')}</div>` : ''}

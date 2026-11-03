@@ -135,7 +135,11 @@ function gather({ config, state, projects, projectId: P, mount, from, to, now })
   // Base connections (finished ones from the file, plus one still connected)
   const baseRecs = projects.readBase(P, mount).filter(r => r.end > from && r.start < end);
   const live = state.sources.get(mount);
-  if (live) baseRecs.push({ start: live.connectedAt, end: now, bytes: live.bytesIn, format: live.monitor?.detected?.() || null, messageTypes: live.monitor?.messageTypes() || [], addr: live.addr, live: true });
+  if (live) {
+    const a = live.netAcc;
+    baseRecs.push({ start: live.connectedAt, end: now, bytes: live.bytesIn, format: live.monitor?.detected?.() || null, messageTypes: live.monitor?.messageTypes() || [], addr: live.addr, live: true,
+      net: a ? { avgLatencyMs: a.n ? Math.round(a.latSum / a.n) : null, maxLatencyMs: a.n ? a.latMax : null, avgPingMs: a.pingN ? Math.round(a.pingSum / a.pingN) : null, epochs: live.monitor?.rtcm?.epochs || 0, missedEpochs: live.monitor?.rtcm?.missed || 0, gradeSec: a.gradeSec } : null });
+  }
   const everBase = projects.readBase(P, mount);
   const firstEver = Math.min(...everBase.map(r => r.start), live?.connectedAt ?? Infinity);
   const measuredFrom = Number.isFinite(firstEver) && firstEver > from ? firstEver : from;
@@ -243,7 +247,18 @@ function gather({ config, state, projects, projectId: P, mount, from, to, now })
   const positionEvents = events.filter(e => e.mount === mount && /^mountpoint\.position_/.test(e.type));
   const changes = events.filter(e => /^(device\.(added|updated|removed|credentials_emailed)|devices\.(imported|exported)|project\.\w+|receiver\.(added|updated|removed)|mountpoint\.(removed|position_set|position_cleared))$/.test(e.type));
   const totals = machineList.reduce((a, m) => ({ ms: a.ms + m.ms, bytes: a.bytes + m.bytes, fixed: a.fixed + m.fix.fixed, fixAll: a.fixAll + m.fix.fixed + m.fix.float + m.fix.other + m.fix.none }), { ms: 0, bytes: 0, fixed: 0, fixAll: 0 });
-  return { from, to, end, span, measuredFrom, onlineMs, online, outages, baseBytes, lastBase, types, formats, sessions, machineList, companyList, peak, peakAt, days, refused, positionEvents, changes, totals };
+  // The base's connection over the month (connections recorded since this was measured)
+  const bn = { latW: 0, latSum: 0, latMax: 0, pingW: 0, pingSum: 0, epochs: 0, missed: 0, grade: { excellent: 0, good: 0, fair: 0, poor: 0 } };
+  for (const r of baseRecs) {
+    if (!r.net) continue;
+    const share = r.end > r.start ? Math.max(0, (Math.min(r.end, end) - Math.max(r.start, from)) / (r.end - r.start)) : 0;
+    const w = (r.end - r.start) * share;
+    if (r.net.avgLatencyMs != null) { bn.latW += w; bn.latSum += r.net.avgLatencyMs * w; bn.latMax = Math.max(bn.latMax, r.net.maxLatencyMs || 0); }
+    if (r.net.avgPingMs != null) { bn.pingW += w; bn.pingSum += r.net.avgPingMs * w; }
+    bn.epochs += (r.net.epochs || 0) * share; bn.missed += (r.net.missedEpochs || 0) * share;
+    for (const k of Object.keys(bn.grade)) bn.grade[k] += (r.net.gradeSec?.[k] || 0) * share;
+  }
+  return { baseNet: bn, from, to, end, span, measuredFrom, onlineMs, online, outages, baseBytes, lastBase, types, formats, sessions, machineList, companyList, peak, peakAt, days, refused, positionEvents, changes, totals };
 }
 
 /** True when a mountpoint had a base or a machine connected during the month (or is still connected). */
@@ -380,6 +395,18 @@ async function renderReport(doc, d) {
     ...(types.length ? [['RTCM messages', types.join(', ')]] : []),
     ['Data from the base', `${mb(g.baseBytes)} (${g.onlineMs ? `${(g.baseBytes / (g.onlineMs / 1000)).toFixed(0)} bytes/s while online` : 'no data'})`],
   ]);
+  {
+    const b = g.baseNet;
+    const gt = b.grade.excellent + b.grade.good + b.grade.fair + b.grade.poor;
+    if (gt || b.latW || b.pingW) {
+      H.kv([
+        ['Latency', b.latW ? `${Math.round(b.latSum / b.latW)} ms average, ${b.latMax} ms worst (base epoch time to arrival at the caster)` : 'Not in this stream\'s data (no RTCM MSM epoch times)'],
+        ...(b.pingW ? [['Network round trip', `${Math.round(b.pingSum / b.pingW)} ms average`]] : []),
+        ...(b.epochs ? [['Missed epochs', `${pct(b.missed, b.epochs + b.missed).toFixed(2)}% (${Math.round(b.missed)} of ${Math.round(b.epochs + b.missed)})`]] : []),
+        ...(gt ? [['Connection', `Excellent ${pct0(b.grade.excellent, gt)} · Good ${pct0(b.grade.good, gt)} · Fair ${pct0(b.grade.fair, gt)} · Poor ${pct0(b.grade.poor, gt)} of the time online`]] : []),
+      ]);
+    }
+  }
   doc.moveDown(0.4);
   doc.font('Helvetica-Bold').fontSize(10).text('Base position', L, doc.y);
   doc.moveDown(0.2);

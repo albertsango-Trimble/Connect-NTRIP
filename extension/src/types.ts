@@ -50,7 +50,27 @@ export interface Rover {
   net?: NetQuality | null;
 }
 
+/** A base's connection quality, measured by the caster every few seconds. */
+export interface BaseQuality {
+  /** How late epochs arrive: from the GNSS time in the base's RTCM MSM messages to their arrival at the caster */
+  latencyMs: number | null;
+  latencyMaxMs: number | null;
+  /** Network round trip to the base */
+  pingMs: number | null;
+  /** Share of epochs the base didn't deliver recently */
+  missedPct: number | null;
+  /** Share of data frames that arrived corrupted */
+  crcPct: number | null;
+  /** Epochs per second the base is sending */
+  rateHz: number | null;
+  at: number;
+  bars: number;
+  label: string;
+  reasons: string[];
+}
+
 export interface Mountpoint {
+  net?: BaseQuality | null;
   name: string;
   identifier: string;
   /** Created by a base that named its own mountpoint */
